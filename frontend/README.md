@@ -1,21 +1,20 @@
 # Semantic Space Studio – Frontend
 
-> Embedding Model with Vector Steering and Semantic Space Visualizer.
+> Embedding Model with Vector Steering and Semantic Space Visualizer.  
 > **Tagline:** Explore. Steer. Understand.
 
-This is the frontend client for **Semantic Space Studio**, initialized inside the repository on branch `feature/react-frontend`.
+Complete React + TypeScript frontend for **VectiQ – Semantic Space Studio**, integrated strictly against [`contracts/api-contract.md`](../contracts/api-contract.md).
 
 ---
 
 ## 🛠 Tech Stack
 
-- **Framework:** [React 18](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/)
+- **Framework:** [React 18](https://react.dev/) + [TypeScript](https://www.typescriptlang.org/) (Strict mode)
 - **Bundler & Dev Server:** [Vite 6](https://vite.dev/)
-- **Styling:** [Tailwind CSS 3](https://tailwindcss.com/) with a dark AI research-lab visual theme
+- **Styling:** [Tailwind CSS 3](https://tailwindcss.com/) with dark AI research-lab design tokens
 - **Routing:** [React Router DOM v6](https://reactrouter.com/)
 - **HTTP Client:** [Axios](https://axios-http.com/)
-- **Visualizations:** [Plotly.js](https://plotly.com/javascript/) & [react-plotly.js](https://github.com/plotly/react-plotly.js) (3D vector embeddings & projections)
-- **Charts:** [Recharts](https://recharts.org/) (Model evaluation & drift metrics)
+- **Visualizations:** [Plotly.js](https://plotly.com/javascript/) & [react-plotly.js](https://github.com/plotly/react-plotly.js) (2D/3D semantic projections & evaluation charts)
 - **Icons:** [Lucide React](https://lucide.dev/)
 
 ---
@@ -24,76 +23,78 @@ This is the frontend client for **Semantic Space Studio**, initialized inside th
 
 ```text
 frontend/
-│
-├── public/                  # Static assets (favicons, svgs)
-│
+├── public/                     # Static assets (vite.svg)
 ├── src/
-│   ├── assets/              # Static media & images
-│   ├── components/          # Reusable UI components
-│   ├── layouts/             # App shell and page layout wrappers
-│   ├── pages/               # Top-level view pages
-│   ├── services/            # API client and endpoints (Axios)
-│   │   └── api.ts           # Pre-configured Axios instance with VITE_API_BASE_URL
-│   ├── hooks/               # Custom React hooks
-│   ├── types/               # TypeScript interfaces & types
-│   │   └── api.ts           # Contract-ready API response types foundation
-│   ├── utils/               # Helper utilities & math formatting
-│   ├── styles/              # Global styles & theme overrides
-│   │
-│   ├── App.tsx              # Minimal welcome screen & environment verifier
-│   ├── main.tsx             # Application entry point
-│   └── index.css            # Tailwind directives & dark theme base styles
-│
-├── .env.example             # Environment template (VITE_API_BASE_URL)
-├── .env                     # Local environment settings
-├── .gitignore               # Frontend gitignore rules
-├── index.html               # Main HTML document template
-├── package.json             # Dependencies and project scripts
-├── tsconfig.json            # TypeScript compiler configuration
-├── vite.config.ts           # Vite bundler configuration
-└── README.md                # Frontend documentation
+│   ├── assets/                 # Static media
+│   ├── components/
+│   │   ├── charts/             # PlotlyChart, SemanticSpacePlot, EvaluationCharts, NeighborSimilarityChart
+│   │   ├── navigation/         # Responsive Sidebar & Header
+│   │   ├── ui/                 # Reusable design system (Button, Card, Input, Slider, Select, Tooltip, Badge, ErrorAlert, EmptyState, LoadingState)
+│   │   ├── ErrorBoundary.tsx   # React ErrorBoundary
+│   │   ├── NeighborList.tsx    # Nearest-neighbor breakdown list
+│   │   └── ViewModeToggle.tsx  # 2D / 3D projection switcher
+│   ├── context/
+│   │   └── StudioContext.tsx   # Shared API connection & experiment session state
+│   ├── hooks/
+│   │   └── useStudio.ts        # StudioContext hook
+│   ├── layouts/
+│   │   └── AppLayout.tsx       # Integrated sidebar + header shell
+│   ├── pages/
+│   │   ├── OverviewPage.tsx
+│   │   ├── SemanticExplorerPage.tsx
+│   │   ├── VectorSteeringPage.tsx
+│   │   ├── ComparisonLabPage.tsx
+│   │   └── EvaluationDashboardPage.tsx
+│   ├── services/
+│   │   ├── api.ts              # Centralized Axios client & error parser
+│   │   └── vectiqService.ts    # Contract endpoints (health, config, semantic-map, steer, evaluate)
+│   ├── styles/
+│   │   └── theme.css           # Global CSS design tokens
+│   ├── types/
+│   │   └── api.ts              # Canonical TypeScript types matching contracts/api-contract.md
+│   ├── utils/
+│   │   ├── cn.ts               # Tailwind class merge helper
+│   │   └── format.ts           # Display formatters & canonical contract defaults
+│   ├── App.tsx                 # Route definitions
+│   ├── main.tsx                # App mount with BrowserRouter
+│   └── index.css               # Tailwind layers & studio component utilities
+├── .env.example                # VITE_API_BASE_URL=http://localhost:8000
+├── .gitignore
+├── index.html
+├── package.json
+├── postcss.config.js
+├── tailwind.config.js
+├── tsconfig.json
+└── vite.config.ts
 ```
 
 ---
 
-## 🚀 Getting Started
+## 🚀 Running Locally
 
-### 1. Install Dependencies
-From the `frontend/` directory:
 ```bash
+cd frontend
 npm install
-```
-
-### 2. Configure Environment Variables
-Copy `.env.example` to `.env` (already done by default):
-```bash
-cp .env.example .env
-```
-Default configuration:
-```env
-VITE_API_BASE_URL=http://localhost:8000
-```
-
-### 3. Start Development Server
-```bash
 npm run dev
 ```
-Open `http://localhost:5173` in your browser.
 
-### 4. Build for Production
+Open [http://localhost:5173](http://localhost:5173).
+
+### Production Build
+
 ```bash
+cd frontend
 npm run build
 ```
-Build output will be generated in `frontend/dist/`.
 
 ---
 
-## 📌 Architecture Notes & Boundaries
+## 🔌 Integrated Contract Endpoints
 
-- **API Layer:** `src/services/api.ts` exports `apiClient` pointing to `VITE_API_BASE_URL`.
-- **Contracts:** Once `contracts/api-contract.md` is finalized with the backend team, full request/response schemas will be added to `src/types/api.ts`.
-- **Upcoming Modules:**
-  - Semantic Space 3D Explorer
-  - Vector Steering Lab
-  - Model Comparison Lab
-  - Evaluation & Benchmarking Dashboard
+All endpoints are consumed from `VITE_API_BASE_URL` (default `http://localhost:8000`):
+
+- `GET /api/v1/health`
+- `GET /api/v1/config`
+- `GET /api/v1/semantic-map`
+- `POST /api/v1/steer`
+- `POST /api/v1/evaluate`

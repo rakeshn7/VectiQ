@@ -10,6 +10,23 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  define: {
+    global: 'globalThis',
+  },
+  optimizeDeps: {
+    include: ['react-plotly.js', 'plotly.js/dist/plotly'],
+  },
+  build: {
+    chunkSizeWarningLimit: 5500,
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          'react-vendor': ['react', 'react-dom', 'react-router-dom', 'axios'],
+          'plotly-vendor': ['plotly.js/dist/plotly', 'react-plotly.js'],
+        },
+      },
+    },
+  },
   server: {
     port: 5173,
     host: true,
