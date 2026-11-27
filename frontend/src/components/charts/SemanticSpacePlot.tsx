@@ -1,5 +1,5 @@
-import React, { useMemo } from 'react';
-import { Compass } from 'lucide-react';
+import React, { useMemo, useState } from 'react';
+import { Compass, Focus, Globe, RotateCcw } from 'lucide-react';
 import type { Data, Layout, PlotMouseEvent } from 'plotly.js';
 import { PlotlyChart } from '@/components/charts/PlotlyChart';
 import { EmptyState } from '@/components/ui';
@@ -36,11 +36,22 @@ export interface SemanticSpacePlotProps {
   heightClassName?: string;
   emptyTitle?: string;
   emptyDescription?: string;
+  onResetView?: () => void;
 }
 
 function truncateText(text: string | undefined | null, maxLen = 72): string {
   if (!text) return '';
   return text.length > maxLen ? `${text.slice(0, maxLen - 1)}…` : text;
+}
+
+function computeAxisBounds(values: number[], minSpan = 1.2): [number, number] {
+  const finite = values.filter((v) => Number.isFinite(v));
+  if (finite.length === 0) return [0, 1];
+  const min = Math.min(...finite);
+  const max = Math.max(...finite);
+  const span = max - min;
+  const pad = Math.max(span * 0.25, minSpan * 0.5);
+  return [min - pad, max + pad];
 }
 
 export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
@@ -58,15 +69,42 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
   heightClassName = 'h-[460px]',
   emptyTitle = 'No Semantic Points to Display',
   emptyDescription = 'No coordinates match the current view or filter criteria.',
+  onResetView,
 }) => {
   const is3D = mode === '3d';
+  const [focusActiveVector, setFocusActiveVector] = useState<boolean>(false);
+  const [viewResetCount, setViewResetCount] = useState<number>(0);
+
+  const hasActiveOverlay = Boolean(
+    originalPoint || steeredPoint || (trajectorySteps && trajectorySteps.length > 0)
+  );
+
+  // Build deterministic revision keys so Plotly always re-draws when coordinates/inputs change
+  const activeVectorKey = useMemo(() => {
+    const origKey = originalPoint
+      ? `${originalPoint.coordinates.x}:${originalPoint.coordinates.y}:${originalPoint.coordinates.z}:${originalPoint.text}`
+      : 'none';
+    const steerKey = steeredPoint
+      ? `${steeredPoint.coordinates.x}:${steeredPoint.coordinates.y}:${steeredPoint.coordinates.z}:${steeredPoint.label}`
+      : 'none';
+    const trajKey = trajectorySteps?.length
+      ? `${trajectorySteps.length}:${trajectorySteps[0].coordinates.x}:${trajectorySteps[trajectorySteps.length - 1].coordinates.x}`
+      : '0';
+    return `${origKey}|${steerKey}|${trajKey}`;
+  }, [originalPoint, steeredPoint, trajectorySteps]);
+
+  const dataSignature = useMemo(() => {
+    const pts = visiblePoints ?? semanticMap?.points ?? [];
+    const ptsKey = `${pts.length}:${pts[0]?.id ?? ''}:${pts[pts.length - 1]?.id ?? ''}`;
+    return `${mode}|${focusActiveVector ? 'focus' : 'full'}|${ptsKey}|${selectedCorpusPointId ?? ''}|${activeVectorKey}`;
+  }, [mode, focusActiveVector, visiblePoints, semanticMap, selectedCorpusPointId, activeVectorKey]);
 
   const traces = useMemo<Data[]>(() => {
     const result: Data[] = [];
     const points = visiblePoints ?? semanticMap?.points ?? [];
     const clusters = semanticMap?.clusters ?? [];
 
-    // 1. Background corpus clusters
+    // 1. Background corpus clusters (subdued when an active steering vector or trajectory is overlaid)
     if (points.length > 0) {
       const grouped = new Map<string, SemanticMapPoint[]>();
       for (const pt of points) {
@@ -101,14 +139,15 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
             customdata: groupPoints.map((p) => p.id),
             hovertemplate: '%{text}<extra></extra>',
             marker: {
-              size: 5,
+              size: hasActiveOverlay ? 3.5 : 5,
               color,
-              opacity: originalPoint || steeredPoint || trajectorySteps?.length ? 0.35 : 0.82,
+              opacity: hasActiveOverlay ? 0.2 : 0.85,
+              line: { width: 0.5, color: '#FFFFFF' },
             },
           });
         } else {
           result.push({
-            type: 'scatter',
+            type: points.length > 500 ? 'scattergl' : 'scatter',
             mode: 'markers',
             name: label,
             x: groupPoints.map((p) => p.coordinates.x),
@@ -117,10 +156,10 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
             customdata: groupPoints.map((p) => p.id),
             hovertemplate: '%{text}<extra></extra>',
             marker: {
-              size: 8,
+              size: hasActiveOverlay ? 6 : 8,
               color,
-              opacity: originalPoint || steeredPoint || trajectorySteps?.length ? 0.35 : 0.85,
-              line: { width: 1, color: '#090d16' },
+              opacity: hasActiveOverlay ? 0.22 : 0.88,
+              line: { width: 1, color: '#FFFFFF' },
             },
           });
         }
@@ -148,9 +187,9 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
             hovertemplate: '%{text}<extra></extra>',
             marker: {
               size: 9,
-              color: '#f8fafc',
+              color: '#1B2E4B',
               symbol: 'diamond',
-              line: { width: 2, color: '#38bdf8' },
+              line: { width: 2, color: '#FFFFFF' },
             },
           });
         } else {
@@ -164,9 +203,9 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
             hovertemplate: '%{text}<extra></extra>',
             marker: {
               size: 14,
-              color: 'rgba(56, 189, 248, 0.25)',
+              color: 'rgba(27, 46, 75, 0.16)',
               symbol: 'circle',
-              line: { width: 2.5, color: '#f8fafc' },
+              line: { width: 2.5, color: '#1B2E4B' },
             },
           });
         }
@@ -189,7 +228,7 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
           z: originalNeighbors.map((n) => n.coordinates.z),
           text: hover,
           hovertemplate: '%{text}<extra></extra>',
-          marker: { size: 6, color: '#0ea5e9', symbol: 'circle-open' },
+          marker: { size: 6, color: '#3E5C8A', symbol: 'circle-open' },
         });
       } else {
         result.push({
@@ -202,8 +241,8 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
           hovertemplate: '%{text}<extra></extra>',
           marker: {
             size: 11,
-            color: 'rgba(14, 165, 233, 0.2)',
-            line: { width: 2, color: '#38bdf8' },
+            color: 'rgba(62, 92, 138, 0.14)',
+            line: { width: 2, color: '#3E5C8A' },
           },
         });
       }
@@ -224,7 +263,7 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
           z: steeredNeighbors.map((n) => n.coordinates.z),
           text: hover,
           hovertemplate: '%{text}<extra></extra>',
-          marker: { size: 6, color: '#a855f7', symbol: 'diamond-open' },
+          marker: { size: 6, color: '#0F766E', symbol: 'diamond-open' },
         });
       } else {
         result.push({
@@ -237,9 +276,9 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
           hovertemplate: '%{text}<extra></extra>',
           marker: {
             size: 11,
-            color: 'rgba(168, 85, 247, 0.2)',
+            color: 'rgba(15, 118, 110, 0.14)',
             symbol: 'diamond',
-            line: { width: 2, color: '#a855f7' },
+            line: { width: 2, color: '#0F766E' },
           },
         });
       }
@@ -266,11 +305,15 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
           z: sorted.map((s) => s.coordinates.z),
           text: hover,
           hovertemplate: '%{text}<extra></extra>',
-          line: { width: 4, color: '#38bdf8' },
+          line: { width: 5, color: '#1B2E4B' },
           marker: {
-            size: 6,
+            size: 6.5,
             color: sorted.map((s) => s.strength),
-            colorscale: 'Portland',
+            colorscale: [
+              [0, '#3E5C8A'],
+              [0.5, '#64748B'],
+              [1, '#0F766E'],
+            ],
             showscale: false,
           },
         });
@@ -285,17 +328,17 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
           hovertext: hover,
           hovertemplate: '%{hovertext}<extra></extra>',
           textposition: 'top center',
-          textfont: { size: 10, color: '#cbd5e1', family: 'JetBrains Mono, monospace' },
-          line: { width: 2.5, color: '#38bdf8', dash: 'dot' },
+          textfont: { size: 10, color: '#132033', family: 'JetBrains Mono, monospace' },
+          line: { width: 2.5, color: '#3E5C8A', dash: 'dot' },
           marker: {
             size: 10,
             color: sorted.map((s) => s.strength),
             colorscale: [
-              [0, '#38bdf8'],
-              [0.5, '#f8fafc'],
-              [1, '#a855f7'],
+              [0, '#3E5C8A'],
+              [0.5, '#64748B'],
+              [1, '#0F766E'],
             ],
-            line: { width: 1.5, color: '#090d16' },
+            line: { width: 1.5, color: '#FFFFFF' },
           },
         });
       }
@@ -312,7 +355,7 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
           y: [originalPoint.coordinates.y, steeredPoint.coordinates.y],
           z: [originalPoint.coordinates.z, steeredPoint.coordinates.z],
           hoverinfo: 'skip',
-          line: { width: 5, color: '#f59e0b', dash: 'dash' },
+          line: { width: 6, color: '#B45309', dash: 'dash' },
         });
       } else {
         result.push({
@@ -322,10 +365,20 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
           x: [originalPoint.coordinates.x, steeredPoint.coordinates.x],
           y: [originalPoint.coordinates.y, steeredPoint.coordinates.y],
           hoverinfo: 'skip',
-          line: { width: 2.5, color: '#f59e0b', dash: 'dash' },
+          line: { width: 2.5, color: '#B45309', dash: 'dash' },
         });
       }
     }
+
+    // Smart label placement so Original & Steered text avoid colliding
+    const origTextPos =
+      originalPoint && steeredPoint && originalPoint.coordinates.y > steeredPoint.coordinates.y
+        ? 'top center'
+        : 'bottom center';
+    const steerTextPos =
+      originalPoint && steeredPoint && steeredPoint.coordinates.y >= originalPoint.coordinates.y
+        ? 'top center'
+        : 'bottom center';
 
     // 6. Original Point Marker
     if (originalPoint) {
@@ -340,18 +393,21 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
       if (is3D) {
         result.push({
           type: 'scatter3d',
-          mode: 'markers',
+          mode: 'text+markers',
           name: originalPoint.label,
           x: [originalPoint.coordinates.x],
           y: [originalPoint.coordinates.y],
           z: [originalPoint.coordinates.z],
-          text: [hover],
-          hovertemplate: '%{text}<extra></extra>',
+          text: [originalPoint.label],
+          hovertext: [hover],
+          hovertemplate: '%{hovertext}<extra></extra>',
+          textposition: 'top center',
+          textfont: { size: 11, color: '#1B2E4B', family: 'Inter, sans-serif' },
           marker: {
             size: 10,
-            color: '#38bdf8',
+            color: '#1B2E4B',
             symbol: 'circle',
-            line: { width: 2, color: '#f8fafc' },
+            line: { width: 2, color: '#FFFFFF' },
           },
         });
       } else {
@@ -364,13 +420,13 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
           text: [originalPoint.label],
           hovertext: [hover],
           hovertemplate: '%{hovertext}<extra></extra>',
-          textposition: 'bottom center',
-          textfont: { size: 11, color: '#38bdf8', family: 'Inter, sans-serif' },
+          textposition: origTextPos,
+          textfont: { size: 11, color: '#1B2E4B', family: 'Inter, sans-serif' },
           marker: {
             size: 14,
-            color: '#38bdf8',
+            color: '#1B2E4B',
             symbol: 'circle',
-            line: { width: 2.5, color: '#f8fafc' },
+            line: { width: 2.5, color: '#FFFFFF' },
           },
         });
       }
@@ -389,18 +445,21 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
       if (is3D) {
         result.push({
           type: 'scatter3d',
-          mode: 'markers',
+          mode: 'text+markers',
           name: steeredPoint.label,
           x: [steeredPoint.coordinates.x],
           y: [steeredPoint.coordinates.y],
           z: [steeredPoint.coordinates.z],
-          text: [hover],
-          hovertemplate: '%{text}<extra></extra>',
+          text: [steeredPoint.label],
+          hovertext: [hover],
+          hovertemplate: '%{hovertext}<extra></extra>',
+          textposition: 'bottom center',
+          textfont: { size: 11, color: '#0F766E', family: 'Inter, sans-serif' },
           marker: {
             size: 10,
-            color: '#a855f7',
+            color: '#0F766E',
             symbol: 'diamond',
-            line: { width: 2, color: '#f8fafc' },
+            line: { width: 2, color: '#FFFFFF' },
           },
         });
       } else {
@@ -413,13 +472,13 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
           text: [steeredPoint.label],
           hovertext: [hover],
           hovertemplate: '%{hovertext}<extra></extra>',
-          textposition: 'top center',
-          textfont: { size: 11, color: '#c084fc', family: 'Inter, sans-serif' },
+          textposition: steerTextPos,
+          textfont: { size: 11, color: '#0F766E', family: 'Inter, sans-serif' },
           marker: {
             size: 14,
-            color: '#a855f7',
+            color: '#0F766E',
             symbol: 'diamond',
-            line: { width: 2.5, color: '#f8fafc' },
+            line: { width: 2.5, color: '#FFFFFF' },
           },
         });
       }
@@ -436,15 +495,65 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
     steeredNeighbors,
     trajectorySteps,
     is3D,
+    hasActiveOverlay,
+  ]);
+
+  const focusedBounds = useMemo(() => {
+    if (!focusActiveVector || !hasActiveOverlay) return null;
+    const xs: number[] = [];
+    const ys: number[] = [];
+    const zs: number[] = [];
+
+    if (originalPoint) {
+      xs.push(originalPoint.coordinates.x);
+      ys.push(originalPoint.coordinates.y);
+      zs.push(originalPoint.coordinates.z);
+    }
+    if (steeredPoint) {
+      xs.push(steeredPoint.coordinates.x);
+      ys.push(steeredPoint.coordinates.y);
+      zs.push(steeredPoint.coordinates.z);
+    }
+    for (const n of originalNeighbors ?? []) {
+      xs.push(n.coordinates.x);
+      ys.push(n.coordinates.y);
+      zs.push(n.coordinates.z);
+    }
+    for (const n of steeredNeighbors ?? []) {
+      xs.push(n.coordinates.x);
+      ys.push(n.coordinates.y);
+      zs.push(n.coordinates.z);
+    }
+    for (const s of trajectorySteps ?? []) {
+      xs.push(s.coordinates.x);
+      ys.push(s.coordinates.y);
+      zs.push(s.coordinates.z);
+    }
+
+    if (xs.length === 0) return null;
+    return {
+      x: computeAxisBounds(xs),
+      y: computeAxisBounds(ys),
+      z: computeAxisBounds(zs),
+    };
+  }, [
+    focusActiveVector,
+    hasActiveOverlay,
+    originalPoint,
+    steeredPoint,
+    originalNeighbors,
+    steeredNeighbors,
+    trajectorySteps,
   ]);
 
   const layout = useMemo<Partial<Layout>>(() => {
     const base: Partial<Layout> = {
-      uirevision: mode,
+      uirevision: `${mode}:${focusActiveVector ? 'focus' : 'full'}:${viewResetCount}:${activeVectorKey}`,
+      datarevision: dataSignature,
       title: title
         ? {
             text: title,
-            font: { size: 13, color: '#e2e8f0' },
+            font: { size: 13, color: '#132033' },
             x: 0.02,
           }
         : undefined,
@@ -456,38 +565,46 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
 
     if (is3D) {
       base.scene = {
-        bgcolor: '#090d16',
+        bgcolor: '#FAF9F6',
+        camera: {
+          eye: { x: 1.45, y: 1.45, z: 1.15 },
+        },
         xaxis: {
           title: { text: 'UMAP X' },
-          gridcolor: '#1e293b',
-          zerolinecolor: '#334155',
-          color: '#94a3b8',
+          gridcolor: '#E2DFD7',
+          zerolinecolor: '#CBD5E1',
+          color: '#475569',
+          ...(focusedBounds ? { range: focusedBounds.x, autorange: false } : {}),
         },
         yaxis: {
           title: { text: 'UMAP Y' },
-          gridcolor: '#1e293b',
-          zerolinecolor: '#334155',
-          color: '#94a3b8',
+          gridcolor: '#E2DFD7',
+          zerolinecolor: '#CBD5E1',
+          color: '#475569',
+          ...(focusedBounds ? { range: focusedBounds.y, autorange: false } : {}),
         },
         zaxis: {
           title: { text: 'UMAP Z' },
-          gridcolor: '#1e293b',
-          zerolinecolor: '#334155',
-          color: '#94a3b8',
+          gridcolor: '#E2DFD7',
+          zerolinecolor: '#CBD5E1',
+          color: '#475569',
+          ...(focusedBounds ? { range: focusedBounds.z, autorange: false } : {}),
         },
       };
     } else {
       base.xaxis = {
         title: { text: 'UMAP Dimension 1 (X)' },
-        gridcolor: '#172033',
-        zerolinecolor: '#334155',
-        color: '#94a3b8',
+        gridcolor: '#ECEAE3',
+        zerolinecolor: '#CBD5E1',
+        color: '#475569',
+        ...(focusedBounds ? { range: focusedBounds.x, autorange: false } : {}),
       };
       base.yaxis = {
         title: { text: 'UMAP Dimension 2 (Y)' },
-        gridcolor: '#172033',
-        zerolinecolor: '#334155',
-        color: '#94a3b8',
+        gridcolor: '#ECEAE3',
+        zerolinecolor: '#CBD5E1',
+        color: '#475569',
+        ...(focusedBounds ? { range: focusedBounds.y, autorange: false } : {}),
       };
 
       if (
@@ -509,15 +626,26 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
             showarrow: true,
             arrowhead: 3,
             arrowsize: 1.2,
-            arrowwidth: 2,
-            arrowcolor: '#f59e0b',
+            arrowwidth: 2.2,
+            arrowcolor: '#B45309',
           },
         ];
       }
     }
 
     return base;
-  }, [is3D, mode, title, originalPoint, steeredPoint]);
+  }, [
+    is3D,
+    mode,
+    focusActiveVector,
+    viewResetCount,
+    activeVectorKey,
+    dataSignature,
+    title,
+    originalPoint,
+    steeredPoint,
+    focusedBounds,
+  ]);
 
   if (traces.length === 0) {
     return (
@@ -538,12 +666,108 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
     }
   };
 
+  const handleResetView = () => {
+    setFocusActiveVector(false);
+    setViewResetCount((c) => c + 1);
+    onResetView?.();
+  };
+
   return (
-    <PlotlyChart
-      data={traces}
-      layout={layout}
-      onClick={onSelectCorpusPoint ? handleClick : undefined}
-      heightClassName={heightClassName}
-    />
+    <div className="space-y-2.5">
+      <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border-subtle bg-background/80 px-3 py-2 text-[11px] font-mono">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-text-secondary">
+          {originalPoint && (
+            <span>
+              <span className="font-semibold text-brand-navy">Orig:</span>{' '}
+              {is3D
+                ? `(${formatNumber(originalPoint.coordinates.x, 2)}, ${formatNumber(originalPoint.coordinates.y, 2)}, ${formatNumber(originalPoint.coordinates.z, 2)})`
+                : `(${formatNumber(originalPoint.coordinates.x, 2)}, ${formatNumber(originalPoint.coordinates.y, 2)})`}
+            </span>
+          )}
+          {steeredPoint && (
+            <span>
+              <span className="font-semibold text-brand-teal">Steered:</span>{' '}
+              {is3D
+                ? `(${formatNumber(steeredPoint.coordinates.x, 2)}, ${formatNumber(steeredPoint.coordinates.y, 2)}, ${formatNumber(steeredPoint.coordinates.z, 2)})`
+                : `(${formatNumber(steeredPoint.coordinates.x, 2)}, ${formatNumber(steeredPoint.coordinates.y, 2)})`}
+            </span>
+          )}
+          {!originalPoint && !steeredPoint && trajectorySteps?.length ? (
+            <span>
+              <span className="font-semibold text-brand-navy">Trajectory:</span>{' '}
+              {trajectorySteps.length} steps projected
+            </span>
+          ) : null}
+          {!hasActiveOverlay && (
+            <span className="text-text-muted">
+              {(visiblePoints ?? semanticMap?.points ?? []).length} projected corpus points ({mode.toUpperCase()} view)
+            </span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          {hasActiveOverlay && (
+            <button
+              type="button"
+              onClick={() => setFocusActiveVector((prev) => !prev)}
+              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                focusActiveVector
+                  ? 'border-brand-navy bg-brand-navy text-white'
+                  : 'border-border bg-background-surface text-text-secondary hover:border-brand-slate/60 hover:text-brand-navy'
+              }`}
+            >
+              {focusActiveVector ? (
+                <>
+                  <Globe className="w-3 h-3" />
+                  <span>Full Corpus View</span>
+                </>
+              ) : (
+                <>
+                  <Focus className="w-3 h-3" />
+                  <span>Zoom to Active Vector</span>
+                </>
+              )}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={handleResetView}
+            title="Reset zoom, pan, and camera orientation"
+            className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-background-surface px-2.5 py-1 text-[11px] font-medium text-text-secondary hover:border-brand-slate/60 hover:text-brand-navy transition-colors"
+          >
+            <RotateCcw className="w-3 h-3" />
+            <span>Reset View</span>
+          </button>
+        </div>
+      </div>
+
+      <PlotlyChart
+        plotKey={`${mode}:${viewResetCount}`}
+        data={traces}
+        layout={layout}
+        onClick={onSelectCorpusPoint ? handleClick : undefined}
+        heightClassName={heightClassName}
+      />
+      <div className="border-t border-border-subtle bg-background/70 px-4 py-2.5 flex flex-col gap-1.5 sm:flex-row sm:items-center sm:justify-between text-[11px] text-text-muted">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          <span className="inline-flex items-center gap-1.5 text-brand-navy font-medium">
+            <span className="w-2 h-2 rounded-full bg-[#1B2E4B] inline-block" />
+            Original (λ=0.0)
+          </span>
+          <span className="inline-flex items-center gap-1.5 text-brand-teal font-medium">
+            <span className="w-2 h-2 rotate-45 bg-[#0F766E] inline-block" />
+            Steered (λ≠0.0)
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full border border-[#1B2E4B] inline-block" />
+            Top-K 384D Neighbors
+          </span>
+        </div>
+        <p className="leading-relaxed sm:text-right">
+          Colors mark corpus reference categories (not statistically validated clusters). UMAP
+          distances approximate 384D geometry; cosine math executes in 384D.
+        </p>
+      </div>
+    </div>
   );
 };

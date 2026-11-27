@@ -74,9 +74,9 @@ class Settings(BaseModel):
     def cors_origins(self) -> list[str]:
         """Return deduplicated allowed CORS origins."""
         origins = [
-            origin.strip()
+            origin.strip().rstrip("/")
             for origin in self.frontend_url.split(",")
-            if origin.strip()
+            if origin.strip().rstrip("/")
         ]
         for default_origin in ("http://localhost:5173", "http://127.0.0.1:5173"):
             if default_origin not in origins:

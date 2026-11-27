@@ -4,41 +4,45 @@
 
 @layer base {
   :root {
-    color-scheme: dark;
+    color-scheme: light;
+  }
+
+  html {
+    scroll-behavior: smooth;
   }
 
   body {
-    @apply bg-background text-text-primary antialiased min-h-screen selection:bg-accent-cyan/30 selection:text-white font-sans;
-    background-image:
-      radial-gradient(ellipse 80% 50% at 50% -20%, rgba(56, 189, 248, 0.12), transparent),
-      radial-gradient(ellipse 60% 40% at 80% 100%, rgba(168, 85, 247, 0.08), transparent);
-    background-attachment: fixed;
+    @apply bg-background text-text-primary antialiased min-h-screen selection:bg-brand-slate/15 selection:text-brand-navy font-sans;
   }
 }
 
 @layer components {
   .studio-container {
-    @apply mx-auto w-full max-w-7xl px-6 py-8 md:px-12 md:py-12;
+    @apply mx-auto w-full max-w-6xl px-5 py-8 sm:px-8 md:py-12;
   }
 
   .studio-panel {
-    @apply rounded-xl border border-border bg-background-surface/70 backdrop-blur-sm;
+    @apply rounded-2xl border border-border bg-background-surface shadow-editorial-sm;
   }
 
   .studio-card {
-    @apply rounded-xl border border-border bg-background-surface/80 p-4 transition-all duration-200 hover:border-accent-cyan/40;
+    @apply rounded-2xl border border-border bg-background-surface p-5 shadow-editorial-sm transition-all duration-200 hover:border-brand-slate/40 hover:shadow-editorial-md;
   }
 
   .studio-badge {
     @apply inline-flex items-center gap-1.5 rounded-full border px-3 py-1 font-mono text-xs;
   }
 
+  .editorial-eyebrow {
+    @apply inline-flex items-center gap-2 font-mono text-[11px] uppercase tracking-[0.14em] text-brand-slate font-medium;
+  }
+
   .studio-range {
-    @apply w-full h-2 rounded-lg appearance-none cursor-pointer bg-background-elevated border border-border;
+    @apply w-full h-2 rounded-full appearance-none cursor-pointer bg-background-elevated border border-border;
   }
 
   .studio-range:focus-visible {
-    @apply outline-none ring-2 ring-accent-cyan/50 ring-offset-2 ring-offset-background;
+    @apply outline-none ring-2 ring-brand-slate/40 ring-offset-2 ring-offset-background;
   }
 
   .studio-range::-webkit-slider-thumb {
@@ -47,15 +51,15 @@
     width: 18px;
     height: 18px;
     border-radius: 9999px;
-    background: #38bdf8;
-    border: 2px solid #f8fafc;
-    box-shadow: 0 0 10px rgba(56, 189, 248, 0.45);
+    background: #1B2E4B;
+    border: 2.5px solid #FFFFFF;
+    box-shadow: 0 2px 6px rgba(19, 32, 51, 0.25);
     cursor: pointer;
     transition: transform 0.15s ease, background-color 0.15s ease;
   }
 
   .studio-range::-webkit-slider-thumb:hover {
-    background: #7dd3fc;
+    background: #0F766E;
     transform: scale(1.08);
   }
 
@@ -63,31 +67,73 @@
     width: 18px;
     height: 18px;
     border-radius: 9999px;
-    background: #38bdf8;
-    border: 2px solid #f8fafc;
-    box-shadow: 0 0 10px rgba(56, 189, 248, 0.45);
+    background: #1B2E4B;
+    border: 2.5px solid #FFFFFF;
+    box-shadow: 0 2px 6px rgba(19, 32, 51, 0.25);
     cursor: pointer;
     transition: transform 0.15s ease, background-color 0.15s ease;
   }
 
   .studio-range::-moz-range-thumb:hover {
-    background: #7dd3fc;
+    background: #0F766E;
     transform: scale(1.08);
   }
 }
 
-/* Custom subtle scrollbar */
+/* Purposeful subtle reveal animation */
+@keyframes vectiqFadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.reveal-hidden {
+  opacity: 0;
+  transform: translateY(14px);
+}
+
+.reveal-visible {
+  opacity: 1;
+  transform: translateY(0);
+  transition: opacity 560ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 560ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.animate-hero-in {
+  animation: vectiqFadeUp 640ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  .reveal-hidden,
+  .reveal-visible,
+  .animate-hero-in {
+    opacity: 1 !important;
+    transform: none !important;
+    animation: none !important;
+    transition: none !important;
+  }
+}
+
+/* Subtle warm paper scrollbar */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 ::-webkit-scrollbar-track {
-  background: #090d16;
+  background: #FAF9F6;
 }
 ::-webkit-scrollbar-thumb {
-  background: #1e293b;
+  background: #D6D3C9;
   border-radius: 4px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #334155;
+  background: #B8B4A8;
 }

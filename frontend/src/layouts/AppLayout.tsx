@@ -14,7 +14,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       <Sidebar mobileOpen={mobileOpen} onCloseMobile={() => setMobileOpen(false)} />
       <div className="flex-1 min-w-0 flex flex-col">
         <Header onOpenMobileMenu={() => setMobileOpen(true)} />
-        <main className="flex-1 px-4 sm:px-6 lg:px-8 py-6 max-w-7xl w-full mx-auto">
+        <main className="flex-1 px-4 sm:px-6 lg:px-10 py-8 max-w-7xl w-full mx-auto">
           <ErrorBoundary fallbackTitle="Page Rendering Error">{children}</ErrorBoundary>
         </main>
       </div>

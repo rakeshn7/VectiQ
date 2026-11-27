@@ -15,20 +15,20 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
 
 const variantClasses: Record<ButtonVariant, string> = {
   primary:
-    'bg-gradient-to-r from-sky-500 to-indigo-500 text-white border border-sky-400/30 hover:from-sky-400 hover:to-indigo-400 shadow-sm shadow-sky-500/15',
+    'bg-brand-navy text-white border border-brand-navy hover:bg-brand-navyHover shadow-editorial-sm',
   secondary:
-    'bg-background-elevated text-text-primary border border-border hover:border-accent-cyan/40 hover:bg-background-surface',
+    'bg-background-surface text-brand-navy border border-border hover:border-brand-slate/60 hover:bg-background-secondary/70 shadow-editorial-sm',
   outline:
-    'bg-transparent text-text-secondary border border-border hover:text-text-primary hover:border-slate-600 hover:bg-background-surface/60',
+    'bg-transparent text-text-secondary border border-border hover:text-brand-navy hover:border-brand-slate/50 hover:bg-background-secondary/60',
   ghost:
-    'bg-transparent text-text-secondary border border-transparent hover:text-text-primary hover:bg-background-elevated/70',
+    'bg-transparent text-text-secondary border border-transparent hover:text-brand-navy hover:bg-background-elevated/80',
   danger:
-    'bg-rose-500/15 text-rose-300 border border-rose-500/30 hover:bg-rose-500/25 hover:text-rose-200',
+    'bg-rose-50 text-rose-700 border border-rose-200 hover:bg-rose-100 hover:text-rose-800',
 };
 
 const sizeClasses: Record<ButtonSize, string> = {
   sm: 'h-8 px-3 text-xs gap-1.5 rounded-lg',
-  md: 'h-10 px-4 text-sm gap-2 rounded-lg',
+  md: 'h-10 px-4 text-sm gap-2 rounded-xl',
   lg: 'h-11 px-5 text-sm gap-2.5 rounded-xl',
 };
 
@@ -51,8 +51,8 @@ export const Button: React.FC<ButtonProps> = ({
       type={type}
       disabled={isDisabled}
       className={cn(
-        'inline-flex items-center justify-center font-medium transition-colors duration-150',
-        'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan/50 focus-visible:ring-offset-2 focus-visible:ring-offset-background',
+        'inline-flex items-center justify-center font-medium transition-all duration-150',
+        'focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-slate/45 focus-visible:ring-offset-2 focus-visible:ring-offset-background',
         'disabled:opacity-50 disabled:cursor-not-allowed',
         variantClasses[variant],
         sizeClasses[size],

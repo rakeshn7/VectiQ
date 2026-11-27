@@ -11,7 +11,7 @@ export const Spinner: React.FC<{ className?: string; size?: 'sm' | 'md' | 'lg' }
     md: 'w-5 h-5',
     lg: 'w-7 h-7',
   };
-  return <Loader2 className={cn('animate-spin text-accent-cyan', sizes[size], className)} />;
+  return <Loader2 className={cn('animate-spin text-brand-slate', sizes[size], className)} />;
 };
 
 export interface LoadingStateProps {
@@ -27,12 +27,12 @@ export const LoadingState: React.FC<LoadingStateProps> = ({
 }) => (
   <div
     className={cn(
-      'flex flex-col items-center justify-center text-center py-12 px-6 rounded-xl border border-border bg-background-surface/50',
+      'flex flex-col items-center justify-center text-center py-12 px-6 rounded-2xl border border-border bg-background-surface shadow-editorial-sm',
       className
     )}
   >
     <Spinner size="lg" />
     <p className="mt-4 text-sm font-medium text-text-primary">{title}</p>
-    {description && <p className="mt-1 text-xs text-text-muted max-w-sm">{description}</p>}
+    {description && <p className="mt-1 text-xs text-text-muted max-w-sm leading-relaxed">{description}</p>}
   </div>
 );

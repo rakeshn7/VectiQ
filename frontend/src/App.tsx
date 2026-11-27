@@ -5,6 +5,7 @@ import { AppLayout } from '@/layouts/AppLayout';
 import {
   ComparisonLabPage,
   EvaluationDashboardPage,
+  LandingPage,
   OverviewPage,
   SemanticExplorerPage,
   VectorSteeringPage,
@@ -13,16 +14,50 @@ import {
 export const App: React.FC = () => {
   return (
     <StudioProvider>
-      <AppLayout>
-        <Routes>
-          <Route path="/" element={<OverviewPage />} />
-          <Route path="/explorer" element={<SemanticExplorerPage />} />
-          <Route path="/steering" element={<VectorSteeringPage />} />
-          <Route path="/comparison" element={<ComparisonLabPage />} />
-          <Route path="/evaluation" element={<EvaluationDashboardPage />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </AppLayout>
+      <Routes>
+        <Route path="/" element={<LandingPage />} />
+        <Route
+          path="/overview"
+          element={
+            <AppLayout>
+              <OverviewPage />
+            </AppLayout>
+          }
+        />
+        <Route
+          path="/explorer"
+          element={
+            <AppLayout>
+              <SemanticExplorerPage />
+            </AppLayout>
+          }
+        />
+        <Route
+          path="/steering"
+          element={
+            <AppLayout>
+              <VectorSteeringPage />
+            </AppLayout>
+          }
+        />
+        <Route
+          path="/comparison"
+          element={
+            <AppLayout>
+              <ComparisonLabPage />
+            </AppLayout>
+          }
+        />
+        <Route
+          path="/evaluation"
+          element={
+            <AppLayout>
+              <EvaluationDashboardPage />
+            </AppLayout>
+          }
+        />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
     </StudioProvider>
   );
 };

@@ -202,3 +202,31 @@ def test_cors_allows_frontend_origin(client: TestClient) -> None:
     )
     assert response.status_code == 200
     assert response.headers.get("access-control-allow-origin") == "http://localhost:5173"
+
+
+def test_cors_normalizes_configured_frontend_urls(test_settings: Settings) -> None:
+    """Verify FRONTEND_URL supports comma-separated origins and trailing slashes."""
+    prod_settings = test_settings.model_copy(
+        update={
+            "frontend_url": "https://vectiq-demo.up.railway.app/, https://custom.vectiq.app"
+        }
+    )
+    assert "https://vectiq-demo.up.railway.app" in prod_settings.cors_origins
+    assert "https://custom.vectiq.app" in prod_settings.cors_origins
+    assert "http://localhost:5173" in prod_settings.cors_origins
+    assert "http://127.0.0.1:5173" in prod_settings.cors_origins
+
+    prod_app = create_app(settings=prod_settings, initialize_on_startup=False)
+    with TestClient(prod_app) as prod_client:
+        response = prod_client.options(
+            "/api/v1/health",
+            headers={
+                "Origin": "https://vectiq-demo.up.railway.app",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        assert response.status_code == 200
+        assert (
+            response.headers.get("access-control-allow-origin")
+            == "https://vectiq-demo.up.railway.app"
+        )

@@ -36,14 +36,14 @@ export class ErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoun
   render(): React.ReactNode {
     if (this.state.hasError) {
       return (
-        <div className="rounded-xl border border-rose-500/30 bg-rose-950/20 p-6 text-center">
-          <div className="mx-auto w-10 h-10 rounded-xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-400 mb-3">
+        <div className="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-center">
+          <div className="mx-auto w-10 h-10 rounded-xl bg-rose-100 border border-rose-200 flex items-center justify-center text-rose-700 mb-3">
             <AlertOctagon className="w-5 h-5" />
           </div>
-          <h3 className="text-sm font-semibold text-rose-100">
+          <h3 className="text-sm font-semibold text-rose-950">
             {this.props.fallbackTitle || 'Component Rendering Error'}
           </h3>
-          <p className="mt-1 text-xs text-rose-300/90 max-w-md mx-auto">{this.state.message}</p>
+          <p className="mt-1 text-xs text-rose-800 max-w-md mx-auto">{this.state.message}</p>
           <div className="mt-4">
             <Button
               variant="outline"

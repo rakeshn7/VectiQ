@@ -5,6 +5,7 @@ export * from './EmptyState';
 export * from './ErrorAlert';
 export * from './Input';
 export * from './LoadingState';
+export * from './Reveal';
 export * from './Select';
 export * from './Slider';
 export * from './Tooltip';

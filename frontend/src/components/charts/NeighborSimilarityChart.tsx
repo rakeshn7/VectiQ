@@ -29,7 +29,7 @@ export const NeighborSimilarityChart: React.FC<NeighborSimilarityChartProps> = (
         y: ranks.map((_, i) => originalNeighbors[i]?.cosine_similarity ?? null),
         text: ranks.map((_, i) => originalNeighbors[i]?.id ?? ''),
         hovertemplate: '<b>Original %{x}</b> (%{text})<br>Cosine Similarity: %{y:.4f}<extra></extra>',
-        marker: { color: '#38bdf8', opacity: 0.85 },
+        marker: { color: '#3E5C8A', opacity: 0.9 },
       },
       {
         type: 'bar',
@@ -38,7 +38,7 @@ export const NeighborSimilarityChart: React.FC<NeighborSimilarityChartProps> = (
         y: ranks.map((_, i) => steeredNeighbors[i]?.cosine_similarity ?? null),
         text: ranks.map((_, i) => steeredNeighbors[i]?.id ?? ''),
         hovertemplate: '<b>Steered %{x}</b> (%{text})<br>Cosine Similarity: %{y:.4f}<extra></extra>',
-        marker: { color: '#a855f7', opacity: 0.85 },
+        marker: { color: '#0F766E', opacity: 0.9 },
       },
     ];
   }, [maxLen, originalNeighbors, steeredNeighbors]);
@@ -61,21 +61,26 @@ export const NeighborSimilarityChart: React.FC<NeighborSimilarityChartProps> = (
     );
   }
 
+  const dataRevision = `${originalNeighbors.map((n) => n.id).join(',')}|${steeredNeighbors
+    .map((n) => n.id)
+    .join(',')}`;
+
   const layout: Partial<Layout> = {
     barmode: 'group',
-    uirevision: 'neighbor-sim',
+    uirevision: `neighbor-sim:${maxLen}`,
+    datarevision: dataRevision,
     margin: { l: 52, r: 20, t: 28, b: 48 },
     xaxis: {
       title: { text: 'Nearest Neighbor Rank' },
-      gridcolor: '#172033',
-      color: '#94a3b8',
+      gridcolor: '#ECEAE3',
+      color: '#475569',
     },
     yaxis: {
       title: { text: 'Cosine Similarity (384D)' },
       range: hasNegative ? [-1.05, 1.05] : [0, 1.05],
-      zerolinecolor: '#334155',
-      gridcolor: '#172033',
-      color: '#94a3b8',
+      zerolinecolor: '#CBD5E1',
+      gridcolor: '#ECEAE3',
+      color: '#475569',
     },
   };
 

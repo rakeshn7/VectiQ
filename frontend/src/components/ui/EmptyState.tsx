@@ -19,11 +19,11 @@ export const EmptyState: React.FC<EmptyStateProps> = ({
 }) => (
   <div
     className={cn(
-      'flex flex-col items-center justify-center text-center py-12 px-6 rounded-xl border border-dashed border-border bg-background-secondary/40',
+      'flex flex-col items-center justify-center text-center py-12 px-6 rounded-2xl border border-dashed border-border-strong bg-background-secondary/50',
       className
     )}
   >
-    <div className="w-11 h-11 rounded-xl bg-background-elevated border border-border flex items-center justify-center text-text-muted mb-4">
+    <div className="w-11 h-11 rounded-xl bg-background-surface border border-border shadow-editorial-sm flex items-center justify-center text-brand-slate mb-4">
       {icon ?? <Inbox className="w-5 h-5" />}
     </div>
     <h4 className="text-sm font-semibold text-text-primary">{title}</h4>

@@ -32,7 +32,7 @@ export const Select: React.FC<SelectProps> = ({
   return (
     <div className="space-y-1.5">
       {label && (
-        <label htmlFor={selectId} className="block text-xs font-medium text-text-secondary">
+        <label htmlFor={selectId} className="block text-xs font-medium text-text-primary">
           {label}
         </label>
       )}
@@ -42,14 +42,14 @@ export const Select: React.FC<SelectProps> = ({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           className={cn(
-            'w-full appearance-none rounded-lg border border-border bg-background/80 px-3.5 py-2.5 pr-9 text-sm text-text-primary',
-            'transition-colors duration-150 focus:outline-none focus:border-accent-cyan/60 focus:ring-2 focus:ring-accent-cyan/40',
+            'w-full appearance-none rounded-xl border border-border bg-background-surface px-3.5 py-2.5 pr-9 text-sm text-text-primary',
+            'transition-colors duration-150 focus:outline-none focus:border-brand-slate focus:ring-2 focus:ring-brand-slate/25',
             className
           )}
           {...props}
         >
           {options.map((opt) => (
-            <option key={opt.value} value={opt.value} className="bg-background-secondary text-text-primary">
+            <option key={opt.value} value={opt.value} className="bg-white text-text-primary">
               {opt.label}
             </option>
           ))}

@@ -11,15 +11,15 @@ export const ViewModeToggle: React.FC<ViewModeToggleProps> = ({ mode, onChange }
   <div
     role="group"
     aria-label="Projection Dimensionality"
-    className="inline-flex items-center rounded-lg border border-border bg-background/80 p-0.5"
+    className="inline-flex items-center rounded-xl border border-border bg-background-secondary p-0.5"
   >
     <button
       type="button"
       onClick={() => onChange('2d')}
       className={cn(
-        'px-2.5 py-1 rounded-md text-[11px] font-mono transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan/50',
+        'px-3 py-1 rounded-lg text-[11px] font-mono transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-slate/40',
         mode === '2d'
-          ? 'bg-accent-cyan/20 text-accent-cyan font-semibold'
+          ? 'bg-background-surface text-brand-navy font-semibold shadow-editorial-sm'
           : 'text-text-muted hover:text-text-primary'
       )}
     >
@@ -29,9 +29,9 @@ export const ViewModeToggle: React.FC<ViewModeToggleProps> = ({ mode, onChange }
       type="button"
       onClick={() => onChange('3d')}
       className={cn(
-        'px-2.5 py-1 rounded-md text-[11px] font-mono transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-violet/50',
+        'px-3 py-1 rounded-lg text-[11px] font-mono transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-teal/40',
         mode === '3d'
-          ? 'bg-accent-violet/20 text-purple-300 font-semibold'
+          ? 'bg-background-surface text-brand-teal font-semibold shadow-editorial-sm'
           : 'text-text-muted hover:text-text-primary'
       )}
     >

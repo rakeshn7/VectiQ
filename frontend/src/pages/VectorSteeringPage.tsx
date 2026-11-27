@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import {
+  AlertTriangle,
   ArrowRight,
   BarChart3,
   GitCompareArrows,
+  Info,
   RotateCcw,
   SlidersHorizontal,
   Sparkles,
@@ -22,6 +24,7 @@ import {
   EmptyState,
   ErrorAlert,
   LoadingState,
+  Reveal,
   Select,
   Slider,
   Textarea,
@@ -48,6 +51,12 @@ const SAMPLE_PROMPTS = [
 ];
 
 export const VectorSteeringPage: React.FC = () => {
+  const location = useLocation();
+  const routeState = (location.state as {
+    prefillText?: string;
+    prefillConcept?: ConceptId;
+  } | null) ?? null;
+
   const {
     config,
     configError,
@@ -65,8 +74,12 @@ export const VectorSteeringPage: React.FC = () => {
   const stepStrength = config?.steering.step ?? CONTRACT_STEERING_BOUNDS.step;
   const defaultStrength = config?.steering.default_strength ?? CONTRACT_STEERING_BOUNDS.default_strength;
 
-  const [text, setText] = useState<string>(lastSteerRequest?.text ?? SAMPLE_PROMPTS[0]);
-  const [concept, setConcept] = useState<ConceptId>(lastSteerRequest?.concept ?? 'technical_tone');
+  const [text, setText] = useState<string>(
+    routeState?.prefillText ?? lastSteerRequest?.text ?? SAMPLE_PROMPTS[0]
+  );
+  const [concept, setConcept] = useState<ConceptId>(
+    routeState?.prefillConcept ?? lastSteerRequest?.concept ?? 'technical_tone'
+  );
   const [strength, setStrength] = useState<number>(lastSteerRequest?.strength ?? 0.5);
   const [topK, setTopK] = useState<number>(lastSteerRequest?.top_k_neighbors ?? 5);
   const [includeEmbeddings, setIncludeEmbeddings] = useState<boolean>(
@@ -80,8 +93,23 @@ export const VectorSteeringPage: React.FC = () => {
   const [validationError, setValidationError] = useState<string | undefined>();
 
   useEffect(() => {
+    if (routeState?.prefillText) {
+      setText(routeState.prefillText);
+      setValidationError(undefined);
+    }
+    if (routeState?.prefillConcept) {
+      setConcept(routeState.prefillConcept);
+    }
+  }, [routeState?.prefillText, routeState?.prefillConcept]);
+
+  useEffect(() => {
     void loadSemanticMap();
   }, [loadSemanticMap]);
+
+  const estimatedWordCount = useMemo(() => {
+    const trimmed = text.trim();
+    return trimmed ? trimmed.split(/\s+/).length : 0;
+  }, [text]);
 
   const selectedConceptMeta = useMemo(
     () => concepts.find((c) => c.id === concept) ?? concepts[0],
@@ -150,7 +178,7 @@ export const VectorSteeringPage: React.FC = () => {
   return (
     <div className="space-y-6">
       {configError && (
-        <div className="rounded-xl border border-amber-500/30 bg-amber-950/20 px-4 py-3 text-xs text-amber-200 flex flex-wrap items-center justify-between gap-2">
+        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900 flex flex-wrap items-center justify-between gap-2">
           <span>
             <strong className="font-semibold">Contract Parameter Mode:</strong>{' '}
             <code className="font-mono">GET /api/v1/config</code> is currently unavailable (
@@ -160,375 +188,448 @@ export const VectorSteeringPage: React.FC = () => {
         </div>
       )}
 
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
-        {/* Left Control Workbench */}
-        <Card className="xl:col-span-5">
-          <CardHeader>
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <SlidersHorizontal className="w-4 h-4 text-accent-violet" />
-                Steering Controls
-              </CardTitle>
-              <CardDescription>
-                POST /api/v1/steer &bull; 384D concept manipulation
-              </CardDescription>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <form onSubmit={handleSubmit} className="space-y-5">
-              <div className="space-y-2">
-                <Textarea
-                  label="Input Sentence"
-                  placeholder="Enter a sentence to embed and steer along a concept vector…"
-                  rows={3}
-                  maxLength={1000}
-                  showCount
-                  value={text}
-                  onChange={(e) => {
-                    setText(e.target.value);
-                    if (validationError) setValidationError(undefined);
-                  }}
-                  error={validationError}
-                />
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[11px] text-text-muted">Examples:</span>
-                  {SAMPLE_PROMPTS.map((sample, idx) => (
-                    <button
-                      key={idx}
-                      type="button"
-                      onClick={() => {
-                        setText(sample);
-                        setValidationError(undefined);
-                      }}
-                      className="text-[11px] px-2 py-0.5 rounded-md border border-border bg-background/60 text-text-secondary hover:text-text-primary hover:border-accent-cyan/40 transition-colors"
-                    >
-                      Sample {idx + 1}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Select
-                  label="Semantic Concept"
-                  options={concepts.map((c) => ({ value: c.id, label: c.label }))}
-                  value={concept}
-                  onChange={(val) => setConcept(val as ConceptId)}
-                />
-                {selectedConceptMeta && (
-                  <div className="rounded-lg border border-border/80 bg-background/60 p-3 space-y-1.5">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="text-xs font-medium text-text-primary">
-                        {selectedConceptMeta.label}
-                      </span>
-                      <Badge variant="violet">{selectedConceptMeta.id}</Badge>
-                    </div>
-                    <p className="text-[11px] text-text-muted leading-relaxed">
-                      {selectedConceptMeta.description}
-                    </p>
-                  </div>
-                )}
-              </div>
-
-              <Slider
-                label="Steering Strength (λ)"
-                value={strength}
-                min={minStrength}
-                max={maxStrength}
-                step={stepStrength}
-                onChange={setStrength}
-                negativeLabel={selectedConceptMeta?.negative_label}
-                positiveLabel={selectedConceptMeta?.positive_label}
-              />
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                <Select
-                  label="Top-K Nearest Neighbors"
-                  options={[
-                    { value: '3', label: 'Top 3 Neighbors' },
-                    { value: '5', label: 'Top 5 Neighbors' },
-                    { value: '10', label: 'Top 10 Neighbors' },
-                    { value: '15', label: 'Top 15 Neighbors' },
-                  ]}
-                  value={String(topK)}
-                  onChange={(val) => setTopK(Number(val))}
-                />
-                <label className="flex items-center gap-2 sm:pt-6 text-xs text-text-secondary cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={includeEmbeddings}
-                    onChange={(e) => setIncludeEmbeddings(e.target.checked)}
-                    className="rounded border-border bg-background text-accent-cyan focus:ring-accent-cyan/40"
-                  />
-                  <span>Include 384D embeddings</span>
-                </label>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-border/70">
-                <Button
-                  type="submit"
-                  loading={loading}
-                  leftIcon={<Sparkles className="w-4 h-4" />}
-                  className="flex-1"
-                >
-                  Apply Steering
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={handleReset}
-                  leftIcon={<RotateCcw className="w-4 h-4" />}
-                >
-                  Reset
-                </Button>
-              </div>
-            </form>
-          </CardContent>
-        </Card>
-
-        {/* Right Visualization & Primary Metrics */}
-        <div className="xl:col-span-7 space-y-6">
-          {loading ? (
-            <LoadingState
-              title="Computing Vector Steering on Backend…"
-              description="Running all-MiniLM-L6-v2 inference, 384D steering, and UMAP transform."
-            />
-          ) : apiError ? (
-            <ErrorAlert error={apiError} onRetry={() => void executeSteering()} />
-          ) : !lastSteerResult ? (
-            <EmptyState
-              icon={<SlidersHorizontal className="w-5 h-5" />}
-              title="No Steering Results Yet"
-              description="Enter a sentence, select a semantic concept, set steering strength λ ∈ [-1.0, +1.0], and click Apply Steering to observe backend results."
-            />
-          ) : (
-            <>
-              {/* Active Experiment Summary Header */}
-              <Card className="border-sky-500/25">
-                <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                  <div className="space-y-1 min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge variant="cyan">
-                        {formatConceptLabel(lastSteerResult.concept, concepts)}
-                      </Badge>
-                      <Badge variant={lastSteerResult.strength === 0 ? 'neutral' : 'violet'}>
-                        Strength λ = {formatSigned(lastSteerResult.strength, 2)}
-                      </Badge>
-                      {lastSteerResult.strength === 0 && (
-                        <Badge variant="emerald">Neutral Baseline (Zero Movement)</Badge>
-                      )}
-                    </div>
-                    <p className="text-xs text-text-secondary truncate" title={lastSteerResult.input_text}>
-                      Original: &ldquo;{lastSteerResult.input_text}&rdquo;
-                    </p>
-                  </div>
-
-                  <div className="flex flex-wrap items-center gap-2 shrink-0">
-                    <Link to="/comparison">
-                      <Button
-                        variant="secondary"
-                        size="sm"
-                        leftIcon={<GitCompareArrows className="w-3.5 h-3.5" />}
-                        rightIcon={<ArrowRight className="w-3.5 h-3.5" />}
-                      >
-                        Compare
-                      </Button>
-                    </Link>
-                    <Link to="/evaluation">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        leftIcon={<BarChart3 className="w-3.5 h-3.5" />}
-                      >
-                        Evaluate
-                      </Button>
-                    </Link>
-                  </div>
-                </CardContent>
-              </Card>
-
-              {/* Vector Movement Plot */}
-              <Card>
-                <CardHeader>
-                  <div>
-                    <CardTitle>Vector Movement Visualization</CardTitle>
-                    <CardDescription>
-                      Original (cyan) vs. Steered (violet) position in consistent UMAP projection
-                    </CardDescription>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-3">
-                    {semanticMap && (
-                      <label className="flex items-center gap-1.5 text-xs text-text-secondary cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          checked={showCorpusOverlay}
-                          onChange={(e) => setShowCorpusOverlay(e.target.checked)}
-                          className="rounded border-border bg-background text-accent-cyan focus:ring-accent-cyan/40"
-                        />
-                        <span>Corpus backdrop</span>
-                      </label>
-                    )}
-                    <ViewModeToggle mode={viewMode} onChange={setViewMode} />
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <SemanticSpacePlot
-                    mode={viewMode}
-                    semanticMap={showCorpusOverlay ? semanticMap : null}
-                    originalPoint={{
-                      label: 'Original',
-                      text: lastSteerResult.input_text,
-                      coordinates: lastSteerResult.original.coordinates,
-                      conceptScore: lastSteerResult.original.concept_score,
-                    }}
-                    steeredPoint={{
-                      label: `Steered (λ=${formatSigned(lastSteerResult.strength, 2)})`,
-                      text: `Steered along ${lastSteerResult.concept}`,
-                      coordinates: lastSteerResult.steered.coordinates,
-                      conceptScore: lastSteerResult.steered.concept_score,
-                    }}
-                    originalNeighbors={lastSteerResult.original.nearest_neighbors}
-                    steeredNeighbors={lastSteerResult.steered.nearest_neighbors}
-                    heightClassName="h-[420px]"
-                  />
-                </CardContent>
-              </Card>
-
-              {/* Key Backend Metrics Grid */}
-              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-                <Card>
-                  <CardContent className="p-4">
-                    <div className="flex items-center justify-between text-[11px] text-text-muted">
-                      <span>Concept Delta</span>
-                      <Tooltip content="Change in projection onto the target concept direction: steered_score - original_score." />
-                    </div>
-                    <div className="mt-1.5 text-lg font-mono font-semibold text-accent-cyan tabular-nums">
-                      {formatSigned(lastSteerResult.concept_metrics.delta, 4)}
-                    </div>
-                    <div className="text-[11px] font-mono text-text-muted mt-1">
-                      {formatNumber(lastSteerResult.concept_metrics.original_score, 3)} →{' '}
-                      {formatNumber(lastSteerResult.concept_metrics.steered_score, 3)}
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardContent className="p-4">
-                    <div className="flex items-center justify-between text-[11px] text-text-muted">
-                      <span>Preservation</span>
-                      <Tooltip content="Cosine similarity between original and steered 384D embeddings (1.0 = identical meaning)." />
-                    </div>
-                    <div className="mt-1.5 text-lg font-mono font-semibold text-accent-emerald tabular-nums">
-                      {formatPercent(lastSteerResult.preservation.semantic_preservation_score, 1)}
-                    </div>
-                    <div className="text-[11px] font-mono text-text-muted mt-1">
-                      cos: {formatNumber(lastSteerResult.preservation.cosine_similarity, 4)}
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardContent className="p-4">
-                    <div className="flex items-center justify-between text-[11px] text-text-muted">
-                      <span>384D Displacement</span>
-                      <Tooltip content="Euclidean distance and angular shift between original and steered vectors in 384D space." />
-                    </div>
-                    <div className="mt-1.5 text-lg font-mono font-semibold text-purple-300 tabular-nums">
-                      {formatNumber(lastSteerResult.movement.euclidean_distance_384d, 4)}
-                    </div>
-                    <div className="text-[11px] font-mono text-text-muted mt-1">
-                      angle: {formatNumber(lastSteerResult.movement.angle_degrees, 2)}°
-                    </div>
-                  </CardContent>
-                </Card>
-
-                <Card>
-                  <CardContent className="p-4">
-                    <div className="flex items-center justify-between text-[11px] text-text-muted">
-                      <span>UMAP Shift</span>
-                      <Tooltip content="Euclidean displacement in projected UMAP visualization coordinates." />
-                    </div>
-                    <div className="mt-1.5 text-lg font-mono font-semibold text-amber-300 tabular-nums">
-                      {formatNumber(lastSteerResult.movement.coordinate_shift.projection_displacement, 3)}
-                    </div>
-                    <div className="text-[11px] font-mono text-text-muted mt-1">
-                      dx={formatSigned(lastSteerResult.movement.coordinate_shift.dx, 2)}, dy=
-                      {formatSigned(lastSteerResult.movement.coordinate_shift.dy, 2)}
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-            </>
-          )}
+      {/* Plain-English Orientation Banner */}
+      <Reveal>
+        <div className="rounded-2xl border border-border bg-background-surface px-5 py-3.5 flex items-start gap-3 text-xs text-text-secondary shadow-editorial-sm">
+          <Info className="w-4 h-4 text-brand-teal shrink-0 mt-0.5" />
+          <p className="leading-relaxed">
+            <strong className="text-brand-navy font-semibold">How steering works:</strong> Enter a
+            sentence, choose a contrastive concept axis, and adjust strength{' '}
+            <code className="font-mono">λ ∈ [-1.0, +1.0]</code>. Strength{' '}
+            <code className="font-mono">0.0</code> leaves the vector completely unchanged (100%
+            preservation baseline). Positive or negative strength shifts the 384D representation and
+            retrieves real corpus sentences as geometric proxies—VectiQ inspects embedding movement
+            rather than generating rewritten text.
+          </p>
         </div>
-      </div>
+      </Reveal>
+
+      <Reveal delayMs={40}>
+        <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
+          {/* Left Control Workbench */}
+          <Card className="xl:col-span-5">
+            <CardHeader>
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <SlidersHorizontal className="w-4 h-4 text-brand-teal" />
+                  Steering Controls
+                </CardTitle>
+                <CardDescription>
+                  POST /api/v1/steer &bull; 384D concept manipulation
+                </CardDescription>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleSubmit} className="space-y-5">
+                <div className="space-y-2">
+                  <Textarea
+                    label="Input Sentence"
+                    placeholder="Enter a sentence to embed and steer along a concept vector…"
+                    rows={3}
+                    maxLength={1000}
+                    showCount
+                    value={text}
+                    onChange={(e) => {
+                      setText(e.target.value);
+                      if (validationError) setValidationError(undefined);
+                    }}
+                    error={validationError}
+                  />
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] text-text-muted">Examples:</span>
+                    {SAMPLE_PROMPTS.map((sample, idx) => (
+                      <button
+                        key={idx}
+                        type="button"
+                        onClick={() => {
+                          setText(sample);
+                          setValidationError(undefined);
+                        }}
+                        className="text-[11px] px-2.5 py-0.5 rounded-md border border-border bg-background-secondary/70 text-text-secondary hover:text-brand-navy hover:border-brand-slate/60 transition-colors"
+                      >
+                        Sample {idx + 1}
+                      </button>
+                    ))}
+                  </div>
+                  {estimatedWordCount > 180 && (
+                    <div className="rounded-xl border border-amber-300 bg-amber-50/70 px-3 py-2 flex items-start gap-2 text-xs text-amber-900">
+                      <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-700" />
+                      <span>
+                        <strong>Truncation advisory:</strong> Input has {estimatedWordCount} words;{' '}
+                        <code className="font-mono">all-MiniLM-L6-v2</code> truncates past{' '}
+                        {config?.model.max_sequence_length ?? 256} tokens.
+                      </span>
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-2">
+                  <Select
+                    label="Semantic Concept"
+                    options={concepts.map((c) => ({ value: c.id, label: c.label }))}
+                    value={concept}
+                    onChange={(val) => setConcept(val as ConceptId)}
+                  />
+                  {selectedConceptMeta && (
+                    <div className="rounded-xl border border-border bg-background/75 p-3.5 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-xs font-semibold text-brand-navy">
+                          {selectedConceptMeta.label}
+                        </span>
+                        <Badge variant="violet">{selectedConceptMeta.id}</Badge>
+                      </div>
+                      <p className="text-[11px] text-text-secondary leading-relaxed">
+                        {selectedConceptMeta.description}
+                      </p>
+                      <div className="rounded-lg border border-border-subtle bg-background-surface px-2.5 py-1.5 text-[10.5px] font-mono text-text-secondary flex flex-wrap items-center justify-between gap-2">
+                        <span>E&prime; = normalize(E + &alpha; &middot; D)</span>
+                        <span className="text-text-muted">D = {selectedConceptMeta.id} (384D)</span>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <Slider
+                  label="Steering Strength (λ)"
+                  value={strength}
+                  min={minStrength}
+                  max={maxStrength}
+                  step={stepStrength}
+                  onChange={setStrength}
+                  negativeLabel={selectedConceptMeta?.negative_label}
+                  positiveLabel={selectedConceptMeta?.positive_label}
+                />
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                  <Select
+                    label="Top-K Nearest Neighbors"
+                    options={[
+                      { value: '3', label: 'Top 3 Neighbors' },
+                      { value: '5', label: 'Top 5 Neighbors' },
+                      { value: '10', label: 'Top 10 Neighbors' },
+                      { value: '15', label: 'Top 15 Neighbors' },
+                    ]}
+                    value={String(topK)}
+                    onChange={(val) => setTopK(Number(val))}
+                  />
+                  <label className="flex items-center gap-2 sm:pt-6 text-xs text-text-secondary cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={includeEmbeddings}
+                      onChange={(e) => setIncludeEmbeddings(e.target.checked)}
+                      className="rounded border-border bg-background-surface text-brand-navy focus:ring-brand-slate/40"
+                    />
+                    <span>Include 384D embeddings</span>
+                  </label>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3 pt-3 border-t border-border-subtle">
+                  <Button
+                    type="submit"
+                    loading={loading}
+                    leftIcon={<Sparkles className="w-4 h-4" />}
+                    className="flex-1"
+                  >
+                    Apply Steering
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={handleReset}
+                    leftIcon={<RotateCcw className="w-4 h-4" />}
+                  >
+                    Reset
+                  </Button>
+                </div>
+              </form>
+            </CardContent>
+          </Card>
+
+          {/* Right Visualization & Primary Metrics */}
+          <div className="xl:col-span-7 space-y-6">
+            {loading ? (
+              <LoadingState
+                title="Computing Vector Steering on Backend…"
+                description="Running all-MiniLM-L6-v2 inference, 384D steering, and UMAP transform."
+              />
+            ) : apiError ? (
+              <ErrorAlert error={apiError} onRetry={() => void executeSteering()} />
+            ) : !lastSteerResult ? (
+              <EmptyState
+                icon={<SlidersHorizontal className="w-5 h-5" />}
+                title="No Steering Results Yet"
+                description="Enter a sentence, select a semantic concept, set steering strength λ ∈ [-1.0, +1.0], and click Apply Steering to observe backend results."
+              />
+            ) : (
+              <>
+                {/* Active Experiment Summary Header */}
+                <Card className="border-brand-slate/30">
+                  <CardContent className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div className="space-y-1.5 min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Badge variant="cyan">
+                          {formatConceptLabel(lastSteerResult.concept, concepts)}
+                        </Badge>
+                        <Badge variant={lastSteerResult.strength === 0 ? 'neutral' : 'violet'}>
+                          Strength λ = {formatSigned(lastSteerResult.strength, 2)}
+                        </Badge>
+                        {lastSteerResult.strength === 0 && (
+                          <Badge variant="emerald">Neutral Baseline (Zero Movement)</Badge>
+                        )}
+                      </div>
+                      <p
+                        className="text-xs text-text-secondary truncate"
+                        title={lastSteerResult.input_text}
+                      >
+                        Original: &ldquo;{lastSteerResult.input_text}&rdquo;
+                      </p>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      <Link to="/comparison">
+                        <Button
+                          variant="secondary"
+                          size="sm"
+                          leftIcon={<GitCompareArrows className="w-3.5 h-3.5" />}
+                          rightIcon={<ArrowRight className="w-3.5 h-3.5" />}
+                        >
+                          Compare
+                        </Button>
+                      </Link>
+                      <Link to="/evaluation">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          leftIcon={<BarChart3 className="w-3.5 h-3.5" />}
+                        >
+                          Evaluate
+                        </Button>
+                      </Link>
+                    </div>
+                  </CardContent>
+                </Card>
+
+                {/* Vector Movement Plot */}
+                <Card>
+                  <CardHeader>
+                    <div>
+                      <CardTitle>Vector Movement Visualization</CardTitle>
+                      <CardDescription>
+                        Original (navy circle) vs. Steered (teal diamond) in consistent UMAP
+                        projection
+                      </CardDescription>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-3">
+                      {semanticMap && (
+                        <label className="flex items-center gap-1.5 text-xs text-text-secondary cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={showCorpusOverlay}
+                            onChange={(e) => setShowCorpusOverlay(e.target.checked)}
+                            className="rounded border-border bg-background-surface text-brand-navy focus:ring-brand-slate/40"
+                          />
+                          <span>Corpus backdrop</span>
+                        </label>
+                      )}
+                      <ViewModeToggle mode={viewMode} onChange={setViewMode} />
+                    </div>
+                  </CardHeader>
+                  <CardContent>
+                    <SemanticSpacePlot
+                      mode={viewMode}
+                      semanticMap={showCorpusOverlay ? semanticMap : null}
+                      originalPoint={{
+                        label: 'Original',
+                        text: lastSteerResult.input_text,
+                        coordinates: lastSteerResult.original.coordinates,
+                        conceptScore: lastSteerResult.original.concept_score,
+                      }}
+                      steeredPoint={{
+                        label: `Steered (λ=${formatSigned(lastSteerResult.strength, 2)})`,
+                        text: `Steered along ${lastSteerResult.concept}`,
+                        coordinates: lastSteerResult.steered.coordinates,
+                        conceptScore: lastSteerResult.steered.concept_score,
+                      }}
+                      originalNeighbors={lastSteerResult.original.nearest_neighbors}
+                      steeredNeighbors={lastSteerResult.steered.nearest_neighbors}
+                      heightClassName="h-[420px]"
+                    />
+                  </CardContent>
+                </Card>
+
+                {/* Key Backend Metrics Grid */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                  <Card>
+                    <CardContent className="p-4">
+                      <div className="flex items-center justify-between text-[11px] text-text-muted">
+                        <span>Concept Delta</span>
+                        <Tooltip content="Change in projection onto the target concept direction: steered_score - original_score." />
+                      </div>
+                      <div className="mt-1.5 text-lg font-mono font-semibold text-brand-navy tabular-nums">
+                        {formatSigned(lastSteerResult.concept_metrics.delta, 4)}
+                      </div>
+                      <div className="text-[11px] font-mono text-text-muted mt-1">
+                        {formatNumber(lastSteerResult.concept_metrics.original_score, 3)} →{' '}
+                        {formatNumber(lastSteerResult.concept_metrics.steered_score, 3)}
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardContent className="p-4">
+                      <div className="flex items-center justify-between text-[11px] text-text-muted">
+                        <span>Preservation</span>
+                        <Tooltip content="Cosine similarity between original and steered 384D embeddings (100% = identical meaning)." />
+                      </div>
+                      <div className="mt-1.5 text-lg font-mono font-semibold text-emerald-700 tabular-nums">
+                        {formatPercent(lastSteerResult.preservation.semantic_preservation_score, 1)}
+                      </div>
+                      <div className="text-[11px] font-mono text-text-muted mt-1">
+                        cos: {formatNumber(lastSteerResult.preservation.cosine_similarity, 4)}
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardContent className="p-4">
+                      <div className="flex items-center justify-between text-[11px] text-text-muted">
+                        <span>384D Displacement</span>
+                        <Tooltip content="Euclidean distance and angular shift between original and steered vectors in 384D space." />
+                      </div>
+                      <div className="mt-1.5 text-lg font-mono font-semibold text-brand-teal tabular-nums">
+                        {formatNumber(lastSteerResult.movement.euclidean_distance_384d, 4)}
+                      </div>
+                      <div className="text-[11px] font-mono text-text-muted mt-1">
+                        angle: {formatNumber(lastSteerResult.movement.angle_degrees, 2)}°
+                      </div>
+                    </CardContent>
+                  </Card>
+
+                  <Card>
+                    <CardContent className="p-4">
+                      <div className="flex items-center justify-between text-[11px] text-text-muted">
+                        <span>UMAP Shift</span>
+                        <Tooltip content="Euclidean displacement in projected UMAP visualization coordinates." />
+                      </div>
+                      <div className="mt-1.5 text-lg font-mono font-semibold text-amber-700 tabular-nums">
+                        {formatNumber(
+                          lastSteerResult.movement.coordinate_shift.projection_displacement,
+                          3
+                        )}
+                      </div>
+                      <div className="text-[11px] font-mono text-text-muted mt-1">
+                        dx={formatSigned(lastSteerResult.movement.coordinate_shift.dx, 2)}, dy=
+                        {formatSigned(lastSteerResult.movement.coordinate_shift.dy, 2)}
+                      </div>
+                    </CardContent>
+                  </Card>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      </Reveal>
+
+      {/* Scientific Trade-off & Proxy Note when steering result is active */}
+      {lastSteerResult && !loading && !apiError && (
+        <Reveal delayMs={65}>
+          <div className="rounded-2xl border border-border bg-background-surface px-5 py-3.5 flex items-start gap-3 text-xs text-text-secondary shadow-editorial-sm">
+            <Info className="w-4 h-4 text-brand-slate shrink-0 mt-0.5" />
+            <p className="leading-relaxed">
+              <strong className="text-brand-navy font-semibold">Interpretation note:</strong> At{' '}
+              <code className="font-mono font-medium text-brand-navy">
+                λ = {formatSigned(lastSteerResult.strength, 2)}
+              </code>
+              , semantic preservation relative to the unsteered baseline is{' '}
+              <code className="font-mono font-medium text-brand-navy">
+                {formatPercent(lastSteerResult.preservation.semantic_preservation_score, 1)}
+              </code>
+              . Larger <code className="font-mono">|λ|</code> values intentionally push embeddings
+              further toward the target pole at the expense of original meaning retention.
+              {(lastSteerResult.concept === 'technical_tone' ||
+                lastSteerResult.concept === 'formal_tone') && (
+                <>
+                  {' '}
+                  Note that <code className="font-mono">technical_tone</code> and{' '}
+                  <code className="font-mono">formal_tone</code> share partial geometric alignment
+                  in the corpus, so strong technical steering can modestly lift formal-tone scores.
+                </>
+              )}
+            </p>
+          </div>
+        </Reveal>
+      )}
 
       {/* Embedding & Nearest Neighbor Detail Section */}
       {lastSteerResult && !loading && !apiError && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Original Vector & Neighbors */}
-          <Card>
-            <CardHeader>
-              <div>
-                <CardTitle className="text-accent-cyan">Original Representation</CardTitle>
-                <CardDescription>
-                  Coords {formatCoordinates(lastSteerResult.original.coordinates, 3)} &bull; Concept
-                  Score {formatNumber(lastSteerResult.original.concept_score, 4)}
-                </CardDescription>
-              </div>
-              <Badge variant="cyan">Baseline</Badge>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-1.5">
-                <div className="text-xs font-medium text-text-secondary">384D Embedding Preview</div>
-                <pre className="rounded-lg border border-border bg-background p-3 text-[11px] font-mono text-text-muted overflow-x-auto">
-                  {formatEmbeddingSlice(lastSteerResult.original.embedding, 8)}
-                </pre>
-              </div>
-              <div className="space-y-2">
-                <div className="text-xs font-semibold text-text-primary">
-                  Original Nearest Neighbors
+        <Reveal delayMs={70}>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Original Vector & Neighbors */}
+            <Card>
+              <CardHeader>
+                <div>
+                  <CardTitle className="text-brand-navy">Original Representation</CardTitle>
+                  <CardDescription>
+                    Coords {formatCoordinates(lastSteerResult.original.coordinates, 3)} &bull;
+                    Concept Score {formatNumber(lastSteerResult.original.concept_score, 4)}
+                  </CardDescription>
                 </div>
-                <NeighborList items={lastSteerResult.original.nearest_neighbors} accent="cyan" />
-              </div>
-            </CardContent>
-          </Card>
+                <Badge variant="cyan">Baseline</Badge>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-1.5">
+                  <div className="text-xs font-medium text-text-secondary">
+                    384D Embedding Preview
+                  </div>
+                  <pre className="rounded-xl border border-border bg-background p-3 text-[11px] font-mono text-text-secondary overflow-x-auto">
+                    {formatEmbeddingSlice(lastSteerResult.original.embedding, 8)}
+                  </pre>
+                </div>
+                <div className="space-y-2">
+                  <div className="text-xs font-semibold text-brand-navy">
+                    Original Nearest Neighbors
+                  </div>
+                  <NeighborList items={lastSteerResult.original.nearest_neighbors} accent="cyan" />
+                </div>
+              </CardContent>
+            </Card>
 
-          {/* Steered Vector & Neighbors */}
-          <Card>
-            <CardHeader>
-              <div>
-                <CardTitle className="text-purple-300">Steered Representation</CardTitle>
-                <CardDescription>
-                  Coords {formatCoordinates(lastSteerResult.steered.coordinates, 3)} &bull; Concept
-                  Score {formatNumber(lastSteerResult.steered.concept_score, 4)}
-                </CardDescription>
-              </div>
-              <Badge variant="violet">λ = {formatSigned(lastSteerResult.strength, 2)}</Badge>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-1.5">
-                <div className="text-xs font-medium text-text-secondary">
-                  384D Steered Embedding Preview
+            {/* Steered Vector & Neighbors */}
+            <Card>
+              <CardHeader>
+                <div>
+                  <CardTitle className="text-brand-teal">Steered Representation</CardTitle>
+                  <CardDescription>
+                    Coords {formatCoordinates(lastSteerResult.steered.coordinates, 3)} &bull;
+                    Concept Score {formatNumber(lastSteerResult.steered.concept_score, 4)}
+                  </CardDescription>
                 </div>
-                <pre className="rounded-lg border border-border bg-background p-3 text-[11px] font-mono text-text-muted overflow-x-auto">
-                  {formatEmbeddingSlice(lastSteerResult.steered.embedding, 8)}
-                </pre>
-              </div>
-              <div className="space-y-2">
-                <div className="text-xs font-semibold text-text-primary">
-                  Steered Nearest Neighbors
+                <Badge variant="violet">λ = {formatSigned(lastSteerResult.strength, 2)}</Badge>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-1.5">
+                  <div className="text-xs font-medium text-text-secondary">
+                    384D Steered Embedding Preview
+                  </div>
+                  <pre className="rounded-xl border border-border bg-background p-3 text-[11px] font-mono text-text-secondary overflow-x-auto">
+                    {formatEmbeddingSlice(lastSteerResult.steered.embedding, 8)}
+                  </pre>
                 </div>
-                <NeighborList
-                  items={lastSteerResult.steered.nearest_neighbors}
-                  accent="violet"
-                  highlightIds={steeredNewNeighborIds}
-                  highlightLabel="Shifted In"
-                />
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+                <div className="space-y-2">
+                  <div className="text-xs font-semibold text-brand-teal">
+                    Steered Nearest Neighbors
+                  </div>
+                  <NeighborList
+                    items={lastSteerResult.steered.nearest_neighbors}
+                    accent="violet"
+                    highlightIds={steeredNewNeighborIds}
+                    highlightLabel="Shifted In"
+                  />
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </Reveal>
       )}
     </div>
   );

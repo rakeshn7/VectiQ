@@ -34,17 +34,17 @@ export const Slider: React.FC<SliderProps> = ({
 
   const polarityColor =
     normalized > 0
-      ? 'text-purple-300 border-accent-violet/35 bg-accent-violet/15'
+      ? 'text-brand-teal border-teal-200 bg-teal-50'
       : normalized < 0
-      ? 'text-accent-cyan border-accent-cyan/35 bg-accent-cyan/15'
-      : 'text-text-secondary border-border bg-background-elevated';
+      ? 'text-brand-slate border-slate-300 bg-slate-100'
+      : 'text-text-secondary border-border bg-background-secondary';
 
   const formattedValue = formatSigned(normalized, 2);
 
   return (
     <div className={cn('space-y-3', className)}>
       <div className="flex items-center justify-between gap-2">
-        <label htmlFor={sliderId} className="text-xs font-medium text-text-secondary">
+        <label htmlFor={sliderId} className="text-xs font-medium text-text-primary">
           {label}
         </label>
         <span
@@ -77,7 +77,7 @@ export const Slider: React.FC<SliderProps> = ({
         />
         <div className="flex justify-between gap-2 text-[10px] font-mono text-text-muted mt-2 px-0.5">
           <span className="truncate">{negativeLabel ? `${min.toFixed(1)} (${negativeLabel})` : min.toFixed(1)}</span>
-          <span className="text-text-secondary shrink-0">0.0 (Neutral)</span>
+          <span className="text-text-secondary font-medium shrink-0">0.0 (Neutral)</span>
           <span className="truncate text-right">
             {positiveLabel ? `+${max.toFixed(1)} (${positiveLabel})` : `+${max.toFixed(1)}`}
           </span>
@@ -95,11 +95,11 @@ export const Slider: React.FC<SliderProps> = ({
                 disabled={disabled}
                 onClick={() => onChange(preset)}
                 className={cn(
-                  'px-2 py-1 rounded-md text-[11px] font-mono border transition-colors',
-                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-accent-cyan/50',
+                  'px-2.5 py-1 rounded-lg text-[11px] font-mono border transition-colors',
+                  'focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-slate/40',
                   active
-                    ? 'border-accent-cyan/50 bg-accent-cyan/15 text-accent-cyan'
-                    : 'border-border bg-background/60 text-text-muted hover:text-text-primary hover:border-slate-600'
+                    ? 'border-brand-navy bg-brand-navy text-white font-medium'
+                    : 'border-border bg-background-surface text-text-secondary hover:text-brand-navy hover:border-brand-slate/50'
                 )}
               >
                 {preset > 0 ? `+${preset}` : preset === 0 ? '0.0' : preset}
