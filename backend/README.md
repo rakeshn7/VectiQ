@@ -1,32 +1,56 @@
 # Semantic Space Studio – Backend
 
-FastAPI backend for **Semantic Space Studio – Embedding Model with Vector Steering and Semantic Space Visualizer**.
+FastAPI backend and local AI/ML engine for **VectiQ – Semantic Space Studio: Embedding Model with Vector Steering and Semantic Space Visualizer**.
 
-> **Status:** Initialization phase complete. Only the core FastAPI foundation, configuration, and health-check endpoint are currently implemented.
+## Architecture & Services
 
-## Project Structure
+The backend implements the canonical specification in [../contracts/api-contract.md](../contracts/api-contract.md):
+
+- **`DatasetService`** ([app/services/dataset_service.py](app/services/dataset_service.py)) – Loads and validates the 360-sentence synthetic reference corpus ([data/corpus.csv](data/corpus.csv)) and contrastive concept anchor poles.
+- **`EmbeddingService`** ([app/services/embedding_service.py](app/services/embedding_service.py)) – Loads `sentence-transformers/all-MiniLM-L6-v2` once at startup and produces L2-normalized 384-dimensional `float32` embeddings.
+- **`SteeringService`** ([app/services/steering_service.py](app/services/steering_service.py)) – Extracts contrastive concept directions $D = \text{normalize}(P - N)$ and executes normalized steering $E' = \text{normalize}(E + \alpha \cdot D)$ for `positive_sentiment`, `technical_tone`, and `formal_tone`.
+- **`SemanticMapService`** ([app/services/semantic_map_service.py](app/services/semantic_map_service.py)) – Fits a deterministic 3D UMAP projection once on corpus embeddings, persists/reuses artifacts in `artifacts/`, computes `sklearn.manifold.trustworthiness`, and transforms query/steered embeddings consistently via `umap.transform`.
+- **`SimilarityService`** ([app/services/similarity_service.py](app/services/similarity_service.py)) – Performs vectorized 384D cosine nearest-neighbor retrieval.
+- **`EvaluationService`** ([app/services/evaluation_service.py](app/services/evaluation_service.py)) – Sweeps steering strengths to compute concept control, semantic preservation, Jaccard neighbor stability, Spearman/Pearson monotonicity, $R^2$ linearity, and UMAP trustworthiness.
+
+## Directory Layout
 
 ```text
 backend/
 ├── app/
-│   ├── __init__.py
 │   ├── main.py
 │   ├── api/
-│   │   ├── __init__.py
-│   │   └── health.py
+│   │   ├── dependencies.py
+│   │   └── routes/
+│   │       ├── __init__.py
+│   │       ├── health.py
+│   │       ├── config.py
+│   │       ├── semantic_map.py
+│   │       ├── steer.py
+│   │       └── evaluate.py
+│   ├── core/
+│   │   ├── config.py
+│   │   ├── exceptions.py
+│   │   └── logging.py
 │   ├── models/
-│   │   ├── __init__.py
 │   │   └── schemas.py
-│   ├── services/
-│   │   └── __init__.py
-│   └── core/
-│       ├── __init__.py
-│       └── config.py
+│   └── services/
+│       ├── container.py
+│       ├── dataset_service.py
+│       ├── embedding_service.py
+│       ├── steering_service.py
+│       ├── semantic_map_service.py
+│       ├── similarity_service.py
+│       └── evaluation_service.py
 ├── data/
+│   ├── corpus.csv
+│   └── README.md
 ├── artifacts/
 ├── tests/
-│   ├── __init__.py
-│   └── test_api.py
+│   ├── conftest.py
+│   ├── test_api.py
+│   ├── test_services.py
+│   └── test_integration.py
 ├── .env.example
 ├── .gitignore
 ├── pytest.ini
@@ -34,38 +58,49 @@ backend/
 └── README.md
 ```
 
-## Local Setup
-
-Create and activate a virtual environment inside `backend/`:
+## Windows PowerShell Setup & Run Commands
 
 ```powershell
 cd backend
 python -m venv venv
-venv\Scripts\activate
+.\venv\Scripts\Activate.ps1
 pip install -r requirements.txt
 ```
 
-Optionally copy `.env.example` to `.env` to customize settings:
+Optional environment file:
 
 ```powershell
 copy .env.example .env
 ```
 
-## Run the Server
+Start the FastAPI backend:
 
 ```powershell
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-Available endpoints (initialization phase):
+> **First Startup Behavior:** On the very first startup (when `sentence-transformers/all-MiniLM-L6-v2` is not yet cached locally and `artifacts/` is empty), the backend downloads the model (~90 MB), encodes the 360 reference sentences, fits the 3D UMAP model, warms up Numba JIT transform, and caches the artifacts inside `backend/artifacts/`. Subsequent startups load cached artifacts in seconds.
 
-- `GET http://localhost:8000/` – API root metadata
-- `GET http://localhost:8000/api/v1/health` – Health check
+### Endpoints
+
+- `GET http://localhost:8000/` – Root service info
 - `GET http://localhost:8000/docs` – Interactive Swagger UI
+- `GET http://localhost:8000/api/v1/health` – Service, model, and UMAP readiness
+- `GET http://localhost:8000/api/v1/config` – Model, steering, and projection configuration
+- `GET http://localhost:8000/api/v1/semantic-map` – Reference semantic space coordinates & clusters
+- `POST http://localhost:8000/api/v1/steer` – Contrastive vector steering & 3D trajectory
+- `POST http://localhost:8000/api/v1/evaluate` – Multi-strength steering evaluation suite
 
-## Run Tests
+## Running Tests
+
+Run fast unit & API tests (uses deterministic mock model with real math & real UMAP):
+
+```powershell
+pytest -m "not integration"
+```
+
+Run the full test suite including real `all-MiniLM-L6-v2` model integration tests:
 
 ```powershell
 pytest
 ```
-
