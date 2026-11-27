@@ -1,0 +1,18 @@
+/* Global design tokens for Semantic Space Studio */
+
+:root {
+  --studio-bg-primary: #090d16;
+  --studio-bg-secondary: #0f172a;
+  --studio-bg-surface: #131c31;
+  --studio-bg-elevated: #1a243d;
+  --studio-border-default: #1e293b;
+  --studio-border-subtle: #172033;
+  --studio-accent-cyan: #38bdf8;
+  --studio-accent-violet: #a855f7;
+  --studio-accent-emerald: #10b981;
+  --studio-accent-amber: #f59e0b;
+  --studio-text-primary: #f8fafc;
+  --studio-text-secondary: #cbd5e1;
+  --studio-text-muted: #94a3b8;
+  --studio-radius-panel: 0.75rem;
+}
