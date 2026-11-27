@@ -370,23 +370,39 @@ export const EvaluationDashboardPage: React.FC = () => {
               </CardContent>
             </Card>
 
-            {/* 5. UMAP Trustworthiness (Honest Contract Boundary) */}
-            <Card className="border-dashed border-border">
-              <CardContent className="p-4 space-y-2">
-                <div className="flex items-center justify-between text-xs text-text-muted">
-                  <span className="font-medium text-text-secondary">UMAP Trustworthiness</span>
-                  <Tooltip content="UMAP trustworthiness measures local neighborhood preservation between 384D embeddings and UMAP projection. Not included in contracts/api-contract.md v1.0.0." />
-                </div>
-                <div className="flex items-center gap-1.5 text-sm font-mono font-semibold text-amber-300">
-                  <ShieldAlert className="w-4 h-4 shrink-0" />
-                  <span>Unavailable</span>
-                </div>
-                <p className="text-[11px] text-text-muted leading-relaxed">
-                  Not exposed by <code className="font-mono">POST /api/v1/evaluate</code> in{' '}
-                  <code className="font-mono">api-contract.md v1.0.0</code>.
-                </p>
-              </CardContent>
-            </Card>
+            {/* 5. UMAP Trustworthiness */}
+            {typeof lastEvaluateResult.metrics_summary.umap_trustworthiness === 'number' ? (
+              <Card>
+                <CardContent className="p-4 space-y-2">
+                  <div className="flex items-center justify-between text-xs text-text-muted">
+                    <span className="font-medium text-text-secondary">UMAP Trustworthiness</span>
+                    <Tooltip content="Measures how faithfully local neighborhoods in 384D embedding space are preserved in the fitted 3D UMAP projection (0.0 – 1.0)." />
+                  </div>
+                  <div className="text-xl font-mono font-bold text-amber-300 tabular-nums">
+                    {formatNumber(lastEvaluateResult.metrics_summary.umap_trustworthiness, 4)}
+                  </div>
+                  <p className="text-[11px] text-text-muted leading-relaxed">
+                    Local 384D-to-UMAP neighborhood preservation score returned by backend.
+                  </p>
+                </CardContent>
+              </Card>
+            ) : (
+              <Card className="border-dashed border-border">
+                <CardContent className="p-4 space-y-2">
+                  <div className="flex items-center justify-between text-xs text-text-muted">
+                    <span className="font-medium text-text-secondary">UMAP Trustworthiness</span>
+                    <Tooltip content="UMAP trustworthiness measures local neighborhood preservation between 384D embeddings and UMAP projection." />
+                  </div>
+                  <div className="flex items-center gap-1.5 text-sm font-mono font-semibold text-amber-300">
+                    <ShieldAlert className="w-4 h-4 shrink-0" />
+                    <span>Unavailable</span>
+                  </div>
+                  <p className="text-[11px] text-text-muted leading-relaxed">
+                    Not returned by this backend response.
+                  </p>
+                </CardContent>
+              </Card>
+            )}
           </div>
 
           {/* Interactive Evaluation Charts */}
@@ -580,6 +596,14 @@ export const EvaluationDashboardPage: React.FC = () => {
                     1
                   )}
                 </code>
+                {typeof lastEvaluateResult.metrics_summary.umap_trustworthiness === 'number' && (
+                  <>
+                    , with UMAP trustworthiness{' '}
+                    <code className="font-mono text-text-primary">
+                      {formatNumber(lastEvaluateResult.metrics_summary.umap_trustworthiness, 4)}
+                    </code>
+                  </>
+                )}
                 . All numbers reflect direct backend measurements with no client-side approximation.
               </p>
             </div>

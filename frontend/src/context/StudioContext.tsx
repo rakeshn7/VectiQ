@@ -118,7 +118,11 @@ export const StudioProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setSemanticMapError(null);
 
     try {
-      const data = await fetchSemanticMap(params);
+      const effectiveParams: SemanticMapQueryParams = {
+        limit: 1000,
+        ...params,
+      };
+      const data = await fetchSemanticMap(effectiveParams);
       semanticMapRef.current = data;
       setSemanticMap(data);
     } catch (err) {

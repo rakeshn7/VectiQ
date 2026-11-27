@@ -200,6 +200,7 @@ export interface EvaluateResponse {
       retained_original_neighbors_at_max: number;
     };
     linearity_score: number;
+    umap_trustworthiness?: number | null;
   };
 }
 

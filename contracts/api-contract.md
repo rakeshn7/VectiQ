@@ -577,7 +577,8 @@ Performs multi-step steering across an array of steering strengths. Evaluates tr
       "min_neighbor_stability": 0.1111,
       "retained_original_neighbors_at_max": 1
     },
-    "linearity_score": 0.9884
+    "linearity_score": 0.9884,
+    "umap_trustworthiness": 0.938619
   }
 }
 ```
@@ -593,6 +594,7 @@ Performs multi-step steering across an array of steering strengths. Evaluates tr
 | `stability_summary` | `mean_neighbor_stability` | `float` | Average Jaccard neighborhood overlap index |
 | `stability_summary` | `min_neighbor_stability` | `float` | Minimum neighborhood overlap across range |
 | `metrics_summary` | `linearity_score` | `float` | $R^2$ linear fit coefficient of concept score vs. steering strength |
+| `metrics_summary` | `umap_trustworthiness` | `float` | UMAP projection trustworthiness score, measuring how well local neighborhood relationships are preserved in the low-dimensional projection. Expected range: `[0.0, 1.0]`. |
 
 ---
 
@@ -787,6 +789,7 @@ export interface EvaluateResponse {
       retained_original_neighbors_at_max: number;
     };
     linearity_score: number;
+    umap_trustworthiness?: number | null;
   };
 }
 
