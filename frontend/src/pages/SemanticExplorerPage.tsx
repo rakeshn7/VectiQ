@@ -2,7 +2,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import {
   AlertTriangle,
-  CheckCircle2,
   Compass,
   Filter,
   Info,
@@ -10,12 +9,20 @@ import {
   Search,
   SlidersHorizontal,
   Sparkles,
-  UserCheck,
   X,
 } from 'lucide-react';
+import {
+  HumanConfirmedDistributionSection,
+  HumanVerificationEditor,
+} from '@/components/HumanEmotionVerification';
 import { NeighborList, type NeighborEmotionMeta } from '@/components/NeighborList';
 import { ViewModeToggle } from '@/components/ViewModeToggle';
-import { EMOTION_COLOR_MAP, SemanticSpacePlot, type SpaceViewMode } from '@/components/charts';
+import {
+  EMOTION_COLOR_MAP,
+  SemanticSpacePlot,
+  type GraphEmotionView,
+  type SpaceViewMode,
+} from '@/components/charts';
 import {
   Badge,
   Button,
@@ -35,6 +42,7 @@ import {
 import { useStudio } from '@/hooks/useStudio';
 import {
   analyzeSentenceAffect,
+  fetchEmotionVerification,
   fetchSemanticMap,
   parseApiError,
   steerEmbedding,
@@ -45,6 +53,10 @@ import type {
   ConceptId,
   EmotionAnalyzeResponse,
   EmotionCategory,
+  EmotionReviewHistoryItem,
+  EmotionReviewResponse,
+  HumanEmotionDistributionItem,
+  HumanSentimentLabel,
   ReviewAction,
   SemanticMapPoint,
   SemanticMapResponse,
@@ -59,50 +71,24 @@ import {
   type CorpusFilterState,
 } from '@/utils/corpusFilters';
 import {
+  EMOTION_SELECT_OPTIONS,
+  formatEmotionDisplay,
+  formatEmotionDistributionSummary,
+  formatSentimentDisplay,
+  loadStoredExplorerCustomSession,
+  loadStoredSelectedPointId,
+  resolveEffectiveHumanDistribution,
+  saveStoredExplorerCustomSession,
+  saveStoredSelectedPointId,
+  sentimentVariant,
+} from '@/utils/emotionDistribution';
+import {
   CONTRACT_CONCEPTS,
   formatConceptLabel,
   formatCoordinates,
   formatEmbeddingSlice,
   formatNumber,
-  formatTimestamp,
 } from '@/utils/format';
-
-const EMOTION_SELECT_OPTIONS: Array<{ value: EmotionCategory; label: string }> = [
-  { value: 'joy', label: 'Joy / Happiness' },
-  { value: 'sadness', label: 'Sadness' },
-  { value: 'anger', label: 'Anger' },
-  { value: 'fear', label: 'Fear' },
-  { value: 'surprise', label: 'Surprise' },
-  { value: 'disgust', label: 'Disgust' },
-  { value: 'love', label: 'Love' },
-  { value: 'neutral', label: 'Neutral' },
-  { value: 'other', label: 'Other Nuanced' },
-  { value: 'uncertain', label: 'Uncertain' },
-];
-
-function formatEmotionDisplay(label: string | null | undefined): string {
-  if (!label) return 'Unknown';
-  return EMOTION_COLOR_MAP[label as EmotionCategory]?.label ?? label;
-}
-
-function sentimentVariant(
-  label: string | null | undefined,
-  isUncertain?: boolean | null
-): 'emerald' | 'neutral' | 'rose' | 'amber' {
-  if (isUncertain || label === 'uncertain') return 'amber';
-  if (label === 'positive') return 'emerald';
-  if (label === 'negative') return 'rose';
-  return 'neutral';
-}
-
-function reviewStatusVariant(
-  status: string | undefined
-): 'neutral' | 'emerald' | 'blue' | 'amber' {
-  if (status === 'confirmed') return 'emerald';
-  if (status === 'corrected') return 'blue';
-  if (status === 'flagged_uncertain') return 'amber';
-  return 'neutral';
-}
 
 export const SemanticExplorerPage: React.FC = () => {
   const navigate = useNavigate();
@@ -128,11 +114,13 @@ export const SemanticExplorerPage: React.FC = () => {
   const [filterLoading, setFilterLoading] = useState<boolean>(false);
   const [filterError, setFilterError] = useState<ParsedApiError | null>(null);
   const filterRequestIdRef = useRef<number>(0);
-  const [colorBy, setColorBy] = useState<'category' | 'emotion'>('category');
-  const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
+  const [colorBy, setColorBy] = useState<'category' | 'emotion'>('emotion');
+  const [graphEmotionView, setGraphEmotionView] = useState<GraphEmotionView>('human');
+  const [selectedPointId, setSelectedPointId] = useState<string | null>(() => loadStoredSelectedPointId());
   const [selectedPointNeighbors, setSelectedPointNeighbors] = useState<SteerResponse | null>(null);
   const [selectedNeighborsLoading, setSelectedNeighborsLoading] = useState(false);
   const [selectedNeighborsError, setSelectedNeighborsError] = useState<ParsedApiError | null>(null);
+  const [selectedPointReview, setSelectedPointReview] = useState<EmotionReviewResponse | null>(null);
 
   // Custom sentence exploration via POST /api/v1/steer (λ = 0.0) + POST /api/v1/emotions/analyze
   const [customText, setCustomText] = useState('');
@@ -143,10 +131,10 @@ export const SemanticExplorerPage: React.FC = () => {
   const [customValidationError, setCustomValidationError] = useState<string | undefined>();
   const [projectedTextResult, setProjectedTextResult] = useState<SteerResponse | null>(null);
   const [affectResult, setAffectResult] = useState<EmotionAnalyzeResponse | null>(null);
+  const [affectHistory, setAffectHistory] = useState<EmotionReviewHistoryItem[]>([]);
+  const restoredCustomRef = useRef<boolean>(false);
 
-  // Human emotion verification state (for custom projected sentence or selected corpus sentence)
-  const [humanEmotionChoice, setHumanEmotionChoice] = useState<EmotionCategory>('neutral');
-  const [humanNote, setHumanNote] = useState('');
+  // Human emotion verification status messages
   const [reviewSaving, setReviewSaving] = useState(false);
   const [reviewError, setReviewError] = useState<ParsedApiError | null>(null);
   const [reviewFeedback, setReviewFeedback] = useState<string | null>(null);
@@ -154,6 +142,63 @@ export const SemanticExplorerPage: React.FC = () => {
   useEffect(() => {
     void loadSemanticMap();
   }, [loadSemanticMap]);
+
+  // Restore saved custom projected text + human distribution from backend SQLite on page reload
+  useEffect(() => {
+    if (restoredCustomRef.current || routeState?.autoRunGuided || affectResult) return;
+    const saved = loadStoredExplorerCustomSession();
+    if (!saved) return;
+    restoredCustomRef.current = true;
+    setCustomText(saved.text);
+    setCustomConcept(saved.concept);
+    setIncludeEmbeddings(saved.includeEmbeddings);
+    setCustomLoading(true);
+
+    void Promise.allSettled([
+      fetchEmotionVerification(saved.recordId),
+      steerEmbedding({
+        text: saved.text,
+        concept: saved.concept,
+        strength: 0.0,
+        top_k_neighbors: 5,
+        include_embeddings: saved.includeEmbeddings,
+      }),
+    ]).then(([reviewRes, steerRes]) => {
+      if (reviewRes.status === 'fulfilled') {
+        const rv = reviewRes.value;
+        setAffectHistory(rv.history);
+        setAffectResult({
+          record_id: rv.record_id,
+          input_text: rv.input_text,
+          sentiment: rv.original_sentiment,
+          emotion: rv.original_emotion,
+          embedding_info: {
+            model_name: config?.model.name ?? 'all-MiniLM-L6-v2',
+            dimensions: config?.model.dimensions ?? 384,
+            normalized: true,
+            umap_coordinates: rv.umap_coordinates,
+            concept: saved.concept,
+            concept_score:
+              steerRes.status === 'fulfilled' ? steerRes.value.original.concept_score : 0,
+            embedding: null,
+          },
+          nearest_neighbors:
+            steerRes.status === 'fulfilled'
+              ? steerRes.value.original.nearest_neighbors.map((nn) => ({ ...nn }))
+              : [],
+          review: rv.review,
+          created_at: rv.review.reviewed_at ?? new Date().toISOString(),
+        });
+      } else {
+        saveStoredExplorerCustomSession(null);
+      }
+      if (steerRes.status === 'fulfilled') {
+        setProjectedTextResult(steerRes.value);
+      }
+      setCustomLoading(false);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const conceptOptions = useMemo(() => {
     const concepts = config?.steering.concepts ?? CONTRACT_CONCEPTS;
@@ -192,11 +237,15 @@ export const SemanticExplorerPage: React.FC = () => {
     const map: Record<string, NeighborEmotionMeta> = {};
     if (semanticMap) {
       for (const pt of semanticMap.points) {
-        if (pt.emotion_label || pt.human_emotion_label) {
+        if (pt.emotion_label || pt.human_emotion_label || pt.human_emotion_distribution?.length) {
           map[pt.id] = {
             emotionLabel: pt.emotion_label ?? null,
             rawLabel: pt.emotion_raw_label ?? null,
             humanLabel: pt.human_emotion_label ?? null,
+            humanDistribution: (pt.human_emotion_distribution ?? []).map((d) => ({
+              emotion: d.emotion as EmotionCategory,
+              percentage: d.percentage,
+            })),
           };
         }
       }
@@ -207,6 +256,7 @@ export const SemanticExplorerPage: React.FC = () => {
           emotionLabel: nn.emotion_label ?? null,
           rawLabel: nn.emotion_raw_label ?? null,
           humanLabel: nn.human_emotion_label ?? null,
+          humanDistribution: nn.human_emotion_distribution,
         };
       }
     }
@@ -221,24 +271,25 @@ export const SemanticExplorerPage: React.FC = () => {
     [displayedPoints, semanticMap, selectedPointId]
   );
 
-  // Keep human emotion selector synced when active item changes
+  // Clear review alerts when switching to a different selected sentence
   useEffect(() => {
     setReviewError(null);
     setReviewFeedback(null);
-    if (selectedPoint) {
-      setHumanEmotionChoice(
-        (selectedPoint.human_emotion_label ??
-          selectedPoint.emotion_label ??
-          'neutral') as EmotionCategory
-      );
-      setHumanNote('');
-    } else if (affectResult) {
-      setHumanEmotionChoice(
-        affectResult.review.human_emotion_label ?? affectResult.emotion.predicted_emotion
-      );
-      setHumanNote(affectResult.review.rationale ?? '');
+    setSelectedPointReview(null);
+  }, [selectedPoint?.id]);
+
+  // Fetch full revision history when an already-reviewed corpus sentence is inspected
+  useEffect(() => {
+    if (selectedPoint && selectedPoint.emotion_review_status && selectedPoint.emotion_review_status !== 'unreviewed') {
+      void fetchEmotionVerification(selectedPoint.id)
+        .then((resp) => {
+          setSelectedPointReview(resp);
+        })
+        .catch(() => {
+          // Graceful fallback to semantic-map point summary fields
+        });
     }
-  }, [selectedPoint, affectResult]);
+  }, [selectedPoint?.id, selectedPoint?.emotion_review_status]);
 
   const estimatedWordCount = useMemo(() => {
     const trimmed = customText.trim();
@@ -266,6 +317,7 @@ export const SemanticExplorerPage: React.FC = () => {
 
   const handleSelectCorpusPoint = (id: string) => {
     setSelectedPointId(id);
+    saveStoredSelectedPointId(id);
     setSelectedPointNeighbors(null);
     setSelectedNeighborsError(null);
   };
@@ -305,9 +357,15 @@ export const SemanticExplorerPage: React.FC = () => {
       ]);
       setProjectedTextResult(steerRes);
       setAffectResult(affectRes);
-      setHumanEmotionChoice(affectRes.emotion.predicted_emotion);
-      setHumanNote('');
+      setAffectHistory([]);
       setSelectedPointId(null);
+      saveStoredSelectedPointId(null);
+      saveStoredExplorerCustomSession({
+        recordId: affectRes.record_id,
+        text: trimmed,
+        concept: targetConcept,
+        includeEmbeddings,
+      });
     } catch (err) {
       setCustomError(parseApiError(err));
     } finally {
@@ -317,8 +375,12 @@ export const SemanticExplorerPage: React.FC = () => {
 
   const handleEmotionReview = async (
     targetId: string,
-    action: ReviewAction,
-    targetEmotion: EmotionCategory
+    payload: {
+      action: ReviewAction;
+      distribution?: HumanEmotionDistributionItem[];
+      humanSentiment?: HumanSentimentLabel;
+      rationale?: string;
+    }
   ) => {
     setReviewSaving(true);
     setReviewError(null);
@@ -326,21 +388,34 @@ export const SemanticExplorerPage: React.FC = () => {
     try {
       const resp = await submitEmotionVerification({
         record_id: targetId,
-        action,
-        human_emotion_label: targetEmotion,
-        rationale: humanNote.trim() || undefined,
+        action: payload.action,
+        human_emotion_label:
+          payload.action === 'flag_uncertain' ? ('uncertain' as EmotionCategory) : undefined,
+        human_emotion_distribution: payload.distribution,
+        human_sentiment_label:
+          payload.action === 'flag_uncertain' ? 'uncertain' : payload.humanSentiment,
+        rationale: payload.rationale,
       });
       if (affectResult && affectResult.record_id === targetId) {
         setAffectResult({ ...affectResult, review: resp.review });
+        setAffectHistory(resp.history);
+      } else {
+        setSelectedPointReview(resp);
       }
       await loadSemanticMap(undefined, true);
       if (appliedFilters && hasActiveCorpusFilters(appliedFilters)) {
-        await executeFilterQuery(appliedFilters);
+        await executeFilterQuery(appliedFilters, graphEmotionView, true);
       }
+      const distText =
+        resp.review.review_status === 'flagged_uncertain'
+          ? 'Flagged Uncertain'
+          : formatEmotionDistributionSummary(resp.review.human_emotion_distribution) ||
+            formatEmotionDisplay(resp.review.human_emotion_label);
+      const sentText = resp.review.human_sentiment_label
+        ? ` · Sentiment: ${formatSentimentDisplay(resp.review.human_sentiment_label)}`
+        : '';
       setReviewFeedback(
-        `Saved (${resp.review.review_status}): Human emotion recorded as ${formatEmotionDisplay(
-          resp.review.human_emotion_label
-        )} while original model output (${formatEmotionDisplay(
+        `Saved (${resp.review.review_status}, Rev ${resp.review.revision ?? resp.review.history_count}): Human annotation recorded as ${distText}${sentText} while original model output (${formatEmotionDisplay(
           resp.original_emotion.predicted_emotion
         )}) and UMAP coordinates remain unchanged.`
       );
@@ -351,15 +426,23 @@ export const SemanticExplorerPage: React.FC = () => {
     }
   };
 
-  const executeFilterQuery = async (filtersToApply: CorpusFilterState) => {
+  const executeFilterQuery = async (
+    filtersToApply: CorpusFilterState,
+    labelModeOverride?: GraphEmotionView,
+    preserveSelectionOnEmptyMatch = false
+  ) => {
     const normalized = normalizeCorpusFilters(filtersToApply);
     const isFiltering = hasActiveCorpusFilters(normalized);
     const reqId = ++filterRequestIdRef.current;
+    const effectiveMode = labelModeOverride ?? graphEmotionView;
 
     setFilterLoading(true);
     setFilterError(null);
     try {
-      const result = await fetchSemanticMap(buildSemanticMapFilterParams(normalized, 1000));
+      const result = await fetchSemanticMap({
+        ...buildSemanticMapFilterParams(normalized, 1000),
+        label_mode: effectiveMode,
+      });
       if (reqId !== filterRequestIdRef.current) return;
 
       setFilteredMap(isFiltering ? result : null);
@@ -370,8 +453,13 @@ export const SemanticExplorerPage: React.FC = () => {
       if (normalized.emotion !== 'all') {
         setColorBy('emotion');
       }
-      if (selectedPointId && !result.points.some((pt) => pt.id === selectedPointId)) {
+      if (
+        !preserveSelectionOnEmptyMatch &&
+        selectedPointId &&
+        !result.points.some((pt) => pt.id === selectedPointId)
+      ) {
         setSelectedPointId(null);
+        saveStoredSelectedPointId(null);
         setSelectedPointNeighbors(null);
         setSelectedNeighborsError(null);
       }
@@ -382,6 +470,13 @@ export const SemanticExplorerPage: React.FC = () => {
       if (reqId === filterRequestIdRef.current) {
         setFilterLoading(false);
       }
+    }
+  };
+
+  const handleGraphEmotionViewChange = (nextView: GraphEmotionView) => {
+    setGraphEmotionView(nextView);
+    if (appliedFilters && hasActiveCorpusFilters(appliedFilters)) {
+      void executeFilterQuery(appliedFilters, nextView, true);
     }
   };
 
@@ -532,6 +627,8 @@ export const SemanticExplorerPage: React.FC = () => {
                         onClick={() => {
                           setProjectedTextResult(null);
                           setAffectResult(null);
+                          setAffectHistory([]);
+                          saveStoredExplorerCustomSession(null);
                         }}
                       >
                         Clear Point
@@ -605,17 +702,15 @@ export const SemanticExplorerPage: React.FC = () => {
                       <div className="pt-2 border-t border-border-subtle space-y-2">
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <span className="text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-                            Predicted Emotion ({affectResult.emotion.model_name.split('/').pop()})
+                            Model Prediction — Immutable ({affectResult.emotion.model_name.split('/').pop()})
                           </span>
                           <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background-surface px-2.5 py-0.5 text-[11px] font-medium">
                             <span
                               className="w-2 h-2 rounded-full"
                               style={{
                                 backgroundColor:
-                                  EMOTION_COLOR_MAP[
-                                    affectResult.review.human_emotion_label ??
-                                      affectResult.emotion.predicted_emotion
-                                  ]?.color ?? '#64748B',
+                                  EMOTION_COLOR_MAP[affectResult.emotion.predicted_emotion]?.color ??
+                                  '#64748B',
                               }}
                             />
                             {formatEmotionDisplay(affectResult.emotion.predicted_emotion)} ·{' '}
@@ -630,6 +725,9 @@ export const SemanticExplorerPage: React.FC = () => {
                         )}
 
                         <div className="space-y-1.5">
+                          <div className="text-[11px] font-medium text-text-secondary">
+                            Model Probabilities — immutable
+                          </div>
                           {affectResult.emotion.probabilities.slice(0, 5).map((item) => (
                             <div key={item.label} className="space-y-0.5">
                               <div className="flex justify-between text-[11px]">
@@ -662,121 +760,25 @@ export const SemanticExplorerPage: React.FC = () => {
                       </div>
                     </div>
 
-                    {/* Human Emotion Verification Control (Separated Fields) */}
-                    <div className="rounded-xl border border-border bg-background/60 p-3.5 space-y-3">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-                          <UserCheck className="w-3.5 h-3.5 text-brand-teal" />
-                          Human Emotion Verification
-                        </span>
-                        <Badge variant={reviewStatusVariant(affectResult.review.review_status)}>
-                          {affectResult.review.review_status.replace('_', ' ')}
-                        </Badge>
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                        <div className="rounded-lg border border-border-subtle bg-background-surface px-3 py-2">
-                          <span className="text-[10px] text-text-muted block">
-                            Original Model Prediction (Immutable)
-                          </span>
-                          <span className="font-semibold text-text-primary">
-                            {formatEmotionDisplay(affectResult.emotion.predicted_emotion)}
-                          </span>
-                        </div>
-                        <div className="rounded-lg border border-border-subtle bg-background-surface px-3 py-2">
-                          <span className="text-[10px] text-text-muted block">
-                            Human-Confirmed Emotion
-                          </span>
-                          <span className="font-semibold text-brand-navy">
-                            {affectResult.review.human_emotion_label
-                              ? formatEmotionDisplay(affectResult.review.human_emotion_label)
-                              : 'Pending verification'}
-                          </span>
-                        </div>
-                      </div>
-
-                      {affectResult.review.reviewed_at && (
-                        <div className="text-[10px] font-mono text-text-muted">
-                          Last updated: {formatTimestamp(affectResult.review.reviewed_at)} (
-                          {affectResult.review.history_count} log entries)
-                        </div>
-                      )}
-
-                      <div className="flex flex-wrap gap-2">
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="sm"
-                          loading={reviewSaving}
-                          onClick={() =>
-                            void handleEmotionReview(
-                              affectResult.record_id,
-                              'confirm',
-                              affectResult.emotion.predicted_emotion
-                            )
-                          }
-                          leftIcon={<CheckCircle2 className="w-3.5 h-3.5 text-brand-teal" />}
-                        >
-                          Confirm {formatEmotionDisplay(affectResult.emotion.predicted_emotion)}
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          loading={reviewSaving}
-                          onClick={() =>
-                            void handleEmotionReview(
-                              affectResult.record_id,
-                              'flag_uncertain',
-                              'uncertain'
-                            )
-                          }
-                        >
-                          Mark Uncertain
-                        </Button>
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 items-end">
-                        <Select
-                          label="Select / Correct Emotion"
-                          options={EMOTION_SELECT_OPTIONS}
-                          value={humanEmotionChoice}
-                          onChange={(val) => setHumanEmotionChoice(val as EmotionCategory)}
-                        />
-                        <Button
-                          type="button"
-                          variant="primary"
-                          size="md"
-                          loading={reviewSaving}
-                          onClick={() =>
-                            void handleEmotionReview(
-                              affectResult.record_id,
-                              humanEmotionChoice === 'uncertain'
-                                ? 'flag_uncertain'
-                                : humanEmotionChoice === affectResult.emotion.predicted_emotion
-                                ? 'confirm'
-                                : 'correct',
-                              humanEmotionChoice
-                            )
-                          }
-                        >
-                          Submit Correction
-                        </Button>
-                      </div>
-
-                      <Input
-                        label="Correction Note (Optional)"
-                        value={humanNote}
-                        onChange={(e) => setHumanNote(e.target.value)}
-                        placeholder="Optional note explaining correction…"
+                    {/* Separate Human-Confirmed Distribution + Multi-Emotion Percentage Verification */}
+                    <div className="space-y-3">
+                      <HumanConfirmedDistributionSection review={affectResult.review} />
+                      <HumanVerificationEditor
+                        recordId={affectResult.record_id}
+                        originalEmotion={affectResult.emotion.predicted_emotion}
+                        originalSentiment={
+                          affectResult.sentiment.is_uncertain
+                            ? 'uncertain'
+                            : affectResult.sentiment.predicted_label
+                        }
+                        review={affectResult.review}
+                        history={affectHistory}
+                        saving={reviewSaving}
+                        error={reviewError}
+                        feedback={reviewFeedback}
+                        title="Human Emotion Verification"
+                        onSubmit={(payload) => handleEmotionReview(affectResult.record_id, payload)}
                       />
-
-                      {reviewError && <ErrorAlert error={reviewError} />}
-                      {reviewFeedback && (
-                        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-900">
-                          {reviewFeedback}
-                        </div>
-                      )}
                     </div>
                   </div>
                 </div>
@@ -837,6 +839,7 @@ export const SemanticExplorerPage: React.FC = () => {
                       { value: 'positive', label: 'Positive' },
                       { value: 'neutral', label: 'Neutral' },
                       { value: 'negative', label: 'Negative' },
+                      { value: 'mixed', label: 'Mixed' },
                       { value: 'uncertain', label: 'Uncertain' },
                     ]}
                     value={draftFilters.sentiment}
@@ -987,6 +990,9 @@ export const SemanticExplorerPage: React.FC = () => {
                     semanticMap={semanticMap}
                     visiblePoints={displayedPoints}
                     colorBy={colorBy}
+                    onColorByChange={setColorBy}
+                    emotionView={graphEmotionView}
+                    onEmotionViewChange={handleGraphEmotionViewChange}
                     selectedCorpusPointId={selectedPointId}
                     onSelectCorpusPoint={handleSelectCorpusPoint}
                     originalPoint={
@@ -996,10 +1002,11 @@ export const SemanticExplorerPage: React.FC = () => {
                             text: projectedTextResult.input_text,
                             coordinates: projectedTextResult.original.coordinates,
                             conceptScore: projectedTextResult.original.concept_score,
-                            emotion:
-                              affectResult?.review.human_emotion_label ??
-                              affectResult?.emotion.predicted_emotion ??
-                              null,
+                            emotion: affectResult?.emotion.predicted_emotion ?? null,
+                            humanEmotion: affectResult?.review.human_emotion_label ?? null,
+                            humanDistribution: affectResult?.review.human_emotion_distribution,
+                            humanSentiment: affectResult?.review.human_sentiment_label ?? null,
+                            reviewStatus: affectResult?.review.review_status ?? null,
                             sentiment: affectResult?.sentiment.predicted_label ?? null,
                           }
                         : null
@@ -1031,7 +1038,10 @@ export const SemanticExplorerPage: React.FC = () => {
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => setSelectedPointId(null)}
+                    onClick={() => {
+                      setSelectedPointId(null);
+                      saveStoredSelectedPointId(null);
+                    }}
                     leftIcon={<X className="w-3.5 h-3.5" />}
                   >
                     Clear
@@ -1127,25 +1137,41 @@ export const SemanticExplorerPage: React.FC = () => {
                       {(selectedPoint.emotion_label || selectedPoint.sentiment_label) && (
                         <div className="border-t border-border-subtle pt-2.5 space-y-1.5">
                           <div className="flex justify-between text-xs">
-                            <span className="text-text-muted">Model Emotion</span>
+                            <span className="text-text-muted">Model Emotion (Immutable)</span>
                             <span className="font-medium text-text-primary">
                               {formatEmotionDisplay(selectedPoint.emotion_label)}
                             </span>
                           </div>
                           <div className="flex justify-between text-xs">
                             <span className="text-text-muted">Human Emotion</span>
-                            <span className="font-semibold text-brand-navy">
-                              {selectedPoint.human_emotion_label
-                                ? formatEmotionDisplay(selectedPoint.human_emotion_label)
+                            <span className="font-semibold text-brand-navy text-right">
+                              {selectedPoint.emotion_review_status === 'flagged_uncertain'
+                                ? 'Flagged Uncertain'
+                                : selectedPoint.human_emotion_distribution?.length
+                                ? formatEmotionDistributionSummary(
+                                    selectedPoint.human_emotion_distribution
+                                  )
+                                : selectedPoint.human_emotion_label
+                                ? `${formatEmotionDisplay(selectedPoint.human_emotion_label)} 100%`
                                 : 'Pending'}
                             </span>
                           </div>
                           <div className="flex justify-between text-xs">
-                            <span className="text-text-muted">Sentiment Polarity</span>
+                            <span className="text-text-muted">Model Sentiment (Immutable)</span>
                             <span className="capitalize text-text-secondary">
                               {selectedPoint.sentiment_is_uncertain
                                 ? `uncertain (${selectedPoint.sentiment_label})`
                                 : selectedPoint.sentiment_label}
+                            </span>
+                          </div>
+                          <div className="flex justify-between text-xs">
+                            <span className="text-text-muted">Human Sentiment</span>
+                            <span className="capitalize font-semibold text-brand-navy">
+                              {selectedPoint.emotion_review_status === 'flagged_uncertain'
+                                ? 'Uncertain'
+                                : selectedPoint.human_sentiment_label
+                                ? formatSentimentDisplay(selectedPoint.human_sentiment_label)
+                                : 'Pending'}
                             </span>
                           </div>
                         </div>
@@ -1165,41 +1191,51 @@ export const SemanticExplorerPage: React.FC = () => {
                       </div>
                     </div>
 
-                    <div className="space-y-2 rounded-xl border border-border-subtle bg-background/50 p-3">
-                      <div className="text-[11px] font-semibold text-text-primary">
-                        Verify Corpus Node Emotion
-                      </div>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 items-end">
-                        <Select
-                          options={EMOTION_SELECT_OPTIONS}
-                          value={humanEmotionChoice}
-                          onChange={(val) => setHumanEmotionChoice(val as EmotionCategory)}
-                        />
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="sm"
-                          loading={reviewSaving}
-                          onClick={() =>
-                            void handleEmotionReview(
-                              selectedPoint.id,
-                              humanEmotionChoice === 'uncertain'
-                                ? 'flag_uncertain'
-                                : humanEmotionChoice === selectedPoint.emotion_label
-                                ? 'confirm'
-                                : 'correct',
-                              humanEmotionChoice
-                            )
-                          }
-                        >
-                          Save Verification
-                        </Button>
-                      </div>
-                      {reviewFeedback && (
-                        <p className="text-[11px] text-emerald-800">{reviewFeedback}</p>
-                      )}
-                      {reviewError && <ErrorAlert error={reviewError} />}
-                    </div>
+                    <HumanConfirmedDistributionSection
+                      compact
+                      review={
+                        selectedPointReview?.review ?? {
+                          review_status: selectedPoint.emotion_review_status ?? 'unreviewed',
+                          human_emotion_label: selectedPoint.human_emotion_label ?? null,
+                          human_emotion_distribution: resolveEffectiveHumanDistribution({
+                            reviewStatus: selectedPoint.emotion_review_status ?? 'unreviewed',
+                            humanLabel: selectedPoint.human_emotion_label ?? null,
+                            distribution: selectedPoint.human_emotion_distribution,
+                          }),
+                          human_sentiment_label: selectedPoint.human_sentiment_label ?? null,
+                        }
+                      }
+                    />
+
+                    <HumanVerificationEditor
+                      compact
+                      title="Verify Corpus Node Emotion"
+                      recordId={selectedPoint.id}
+                      originalEmotion={selectedPoint.emotion_label ?? 'neutral'}
+                      originalSentiment={
+                        (selectedPoint.sentiment_is_uncertain
+                          ? 'uncertain'
+                          : (selectedPoint.sentiment_label as HumanSentimentLabel)) ?? 'neutral'
+                      }
+                      review={
+                        selectedPointReview?.review ?? {
+                          review_status: selectedPoint.emotion_review_status ?? 'unreviewed',
+                          human_emotion_label: selectedPoint.human_emotion_label ?? null,
+                          human_emotion_distribution: resolveEffectiveHumanDistribution({
+                            reviewStatus: selectedPoint.emotion_review_status ?? 'unreviewed',
+                            humanLabel: selectedPoint.human_emotion_label ?? null,
+                            distribution: selectedPoint.human_emotion_distribution,
+                          }),
+                          human_sentiment_label: selectedPoint.human_sentiment_label ?? null,
+                          history_count: 0,
+                        }
+                      }
+                      history={selectedPointReview?.history ?? []}
+                      saving={reviewSaving}
+                      error={reviewError}
+                      feedback={reviewFeedback}
+                      onSubmit={(payload) => handleEmotionReview(selectedPoint.id, payload)}
+                    />
 
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <Button

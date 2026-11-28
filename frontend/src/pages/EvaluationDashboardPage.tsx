@@ -39,8 +39,13 @@ import {
   Tooltip,
 } from '@/components/ui';
 import { useStudio } from '@/hooks/useStudio';
-import { evaluateSteering, parseApiError, type ParsedApiError } from '@/services';
-import type { ConceptId } from '@/types/api';
+import {
+  evaluateSteering,
+  fetchEmotionEvaluationSummary,
+  parseApiError,
+  type ParsedApiError,
+} from '@/services';
+import type { ConceptId, HumanEmotionEvaluationSummary } from '@/types/api';
 import {
   buildGoal1Metrics,
   buildGoal2Metrics,
@@ -48,6 +53,10 @@ import {
   isFiniteNum,
   type MetricAuditSpec,
 } from '@/utils/evaluationMetrics';
+import {
+  formatEmotionDisplay,
+  formatEmotionDistributionSummary,
+} from '@/utils/emotionDistribution';
 import {
   CONTRACT_CONCEPTS,
   formatConceptLabel,
@@ -168,12 +177,14 @@ export interface EvaluationDashboardPageProps {
   initialLoading?: boolean;
   initialError?: ParsedApiError | null;
   defaultExpandDetails?: boolean;
+  initialHumanSummary?: HumanEmotionEvaluationSummary | null;
 }
 
 export const EvaluationDashboardPage: React.FC<EvaluationDashboardPageProps> = ({
   initialLoading = false,
   initialError = null,
   defaultExpandDetails = false,
+  initialHumanSummary = null,
 }) => {
   const navigate = useNavigate();
   const {
@@ -204,10 +215,19 @@ export const EvaluationDashboardPage: React.FC<EvaluationDashboardPageProps> = (
   const [loading, setLoading] = useState(initialLoading);
   const [apiError, setApiError] = useState<ParsedApiError | null>(initialError);
   const [validationError, setValidationError] = useState<string | undefined>();
+  const [humanEvalSummary, setHumanEvalSummary] =
+    useState<HumanEmotionEvaluationSummary | null>(initialHumanSummary);
 
   useEffect(() => {
     void loadSemanticMap();
-  }, [loadSemanticMap]);
+    if (!initialHumanSummary) {
+      void fetchEmotionEvaluationSummary()
+        .then(setHumanEvalSummary)
+        .catch(() => {
+          // Optional auxiliary audit panel
+        });
+    }
+  }, [loadSemanticMap, initialHumanSummary]);
 
   const sortedSteps = useMemo(() => {
     if (!lastEvaluateResult) return [];
@@ -940,6 +960,110 @@ export const EvaluationDashboardPage: React.FC<EvaluationDashboardPageProps> = (
             </div>
           </Reveal>
         </>
+      )}
+
+      {/* Human-Confirmed Multi-Label Emotion Annotation Evaluation Integrity Section */}
+      {humanEvalSummary && (
+        <Reveal delayMs={120}>
+          <Card>
+            <CardHeader>
+              <div>
+                <CardTitle className="flex items-center gap-2">
+                  <BarChart3 className="w-4 h-4 text-brand-teal" />
+                  Human-Confirmed Emotion Distribution Evaluation
+                </CardTitle>
+                <CardDescription>
+                  GET /api/v1/emotions/evaluation-summary &bull; Evaluates unmodified model
+                  predictions against confirmed/corrected human percentage distributions
+                </CardDescription>
+              </div>
+              <Badge variant="emerald">
+                {humanEvalSummary.confirmed_ground_truth_count} Confirmed Ground-Truth Records
+              </Badge>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+                <div className="rounded-xl border border-border bg-background p-3">
+                  <div className="text-[11px] text-text-muted">Dominant Top-1 Agreement</div>
+                  <div className="mt-1 text-lg font-mono font-bold text-brand-navy tabular-nums">
+                    {formatPercent(humanEvalSummary.dominant_top1_agreement, 1)}
+                  </div>
+                  <div className="text-[10.5px] font-mono text-text-muted">
+                    {humanEvalSummary.confirmed_ground_truth_count} evaluated
+                  </div>
+                </div>
+                <div className="rounded-xl border border-border bg-background p-3">
+                  <div className="text-[11px] text-text-muted">Multi-Label Target Coverage</div>
+                  <div className="mt-1 text-lg font-mono font-bold text-brand-teal tabular-nums">
+                    {formatPercent(humanEvalSummary.multilabel_target_coverage, 1)}
+                  </div>
+                  <div className="text-[10.5px] font-mono text-text-muted">
+                    {humanEvalSummary.mixed_distribution_count} mixed /{' '}
+                    {humanEvalSummary.single_emotion_count} single
+                  </div>
+                </div>
+                <div className="rounded-xl border border-border bg-background p-3">
+                  <div className="text-[11px] text-text-muted">Mean Soft Distribution Overlap</div>
+                  <div className="mt-1 text-lg font-mono font-bold text-brand-slate tabular-nums">
+                    {formatNumber(humanEvalSummary.mean_soft_distribution_overlap, 4)}
+                  </div>
+                  <div className="text-[10.5px] font-mono text-text-muted">
+                    compositional target overlap
+                  </div>
+                </div>
+                <div className="rounded-xl border border-amber-200 bg-amber-50/50 p-3">
+                  <div className="text-[11px] text-amber-900 font-medium">Excluded Non-Ground-Truth</div>
+                  <div className="mt-1 text-lg font-mono font-bold text-amber-900 tabular-nums">
+                    {humanEvalSummary.excluded_uncertain_count +
+                      humanEvalSummary.excluded_unreviewed_count}
+                  </div>
+                  <div className="text-[10.5px] font-mono text-amber-800">
+                    {humanEvalSummary.excluded_uncertain_count} uncertain &bull;{' '}
+                    {humanEvalSummary.excluded_unreviewed_count} unreviewed
+                  </div>
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-border-subtle bg-background/75 px-3.5 py-2.5 text-[11px] text-text-secondary space-y-1">
+                <div>
+                  <strong className="text-brand-navy">Methodology:</strong>{' '}
+                  {humanEvalSummary.methodology}
+                </div>
+                <div>
+                  <strong className="text-brand-navy">Evaluation Integrity:</strong>{' '}
+                  {humanEvalSummary.limitations}
+                </div>
+              </div>
+
+              {humanEvalSummary.records.length > 0 && (
+                <div className="max-h-52 overflow-y-auto rounded-xl border border-border-subtle divide-y divide-border-subtle text-xs">
+                  {humanEvalSummary.records.slice(0, 10).map((rec) => (
+                    <div
+                      key={rec.record_id}
+                      className="px-3 py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
+                    >
+                      <div className="min-w-0">
+                        <div className="truncate font-medium text-text-primary">
+                          &ldquo;{rec.input_text}&rdquo;
+                        </div>
+                        <div className="text-[10.5px] text-text-muted">
+                          Model: {formatEmotionDisplay(rec.model_predicted_emotion)} (
+                          {(rec.model_confidence * 100).toFixed(1)}%) &rarr; Human:{' '}
+                          <span className="font-semibold text-brand-teal">
+                            {formatEmotionDistributionSummary(rec.human_emotion_distribution)}
+                          </span>
+                        </div>
+                      </div>
+                      <Badge variant={rec.model_top1_in_human_multilabel ? 'emerald' : 'amber'}>
+                        Overlap {formatNumber(rec.soft_overlap_score, 3)}
+                      </Badge>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </Reveal>
       )}
     </div>
   );

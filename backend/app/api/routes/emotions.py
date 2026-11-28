@@ -11,6 +11,7 @@ from app.models.emotion_schemas import (
     EmotionReviewRequest,
     EmotionReviewResponse,
     EnrichedNeighborItem,
+    HumanEmotionEvaluationSummary,
 )
 from app.models.schemas import Coordinate3D, ErrorResponse
 from app.services.container import ServiceContainer
@@ -76,6 +77,10 @@ def analyze_projected_sentence(
                 emotion_raw_label=meta.emotion_raw_label if meta else None,
                 emotion_confidence=meta.emotion_confidence if meta else None,
                 human_emotion_label=overlay.human_emotion_label if overlay else None,
+                human_emotion_distribution=(
+                    overlay.human_emotion_distribution if overlay else []
+                ),
+                human_sentiment_label=overlay.human_sentiment_label if overlay else None,
             )
         )
 
@@ -117,7 +122,7 @@ def submit_emotion_verification(
     payload: EmotionReviewRequest,
     container: ServiceContainer = Depends(get_ready_container),
 ) -> EmotionReviewResponse:
-    """Persist human confirmation or correction separately without overwriting original prediction or UMAP coords."""
+    """Persist human confirmation or percentage distribution separately without overwriting original outputs."""
     _ensure_affect_ready(container)
 
     # Support human verification for both custom projected sentences and reference corpus sentences
@@ -126,6 +131,8 @@ def submit_emotion_verification(
             record_id=payload.record_id,
             action=payload.action,
             human_emotion_label=payload.human_emotion_label,
+            human_emotion_distribution=payload.human_emotion_distribution,
+            human_sentiment_label=payload.human_sentiment_label,
             rationale=payload.rationale,
         )
     except InvalidInputError:
@@ -151,9 +158,25 @@ def submit_emotion_verification(
                     record_id=rec.id,
                     action=payload.action,
                     human_emotion_label=payload.human_emotion_label,
+                    human_emotion_distribution=payload.human_emotion_distribution,
+                    human_sentiment_label=payload.human_sentiment_label,
                     rationale=payload.rationale,
                 )
         raise
+
+
+@router.get(
+    "/evaluation-summary",
+    response_model=HumanEmotionEvaluationSummary,
+    responses={503: {"model": ErrorResponse}},
+    summary="Multi-Label Human-Confirmed Emotion Evaluation Summary",
+)
+def get_emotion_evaluation_summary(
+    container: ServiceContainer = Depends(get_ready_container),
+) -> HumanEmotionEvaluationSummary:
+    """Evaluate model predictions against complete human-confirmed distributions, excluding uncertain/unreviewed."""
+    _ensure_affect_ready(container)
+    return container.emotion_review_store.compute_evaluation_summary()
 
 
 @router.get(
@@ -166,6 +189,6 @@ def get_emotion_verification(
     record_id: str,
     container: ServiceContainer = Depends(get_ready_container),
 ) -> EmotionReviewResponse:
-    """Return preserved original prediction, human label overlay, and timestamped correction log."""
+    """Return preserved original prediction, human distribution overlay, and timestamped correction log."""
     _ensure_affect_ready(container)
     return container.emotion_review_store.get_review(record_id)

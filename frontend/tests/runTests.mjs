@@ -26,6 +26,7 @@ const stubPlotlyPlugin = {
 const frontendRoot = fs.realpathSync(path.resolve(import.meta.dirname, '..'));
 const suites = [
   'evaluationDashboard.test.tsx',
+  'emotionVerification.test.tsx',
   'guideAndGlossary.test.tsx',
   'productionConfig.test.ts',
 ];

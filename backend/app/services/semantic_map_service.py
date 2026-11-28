@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 import threading
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 import joblib
 import numpy as np
@@ -22,6 +22,7 @@ from app.models.schemas import (
     NeighborhoodOverlapDetail,
     OverlapPointExample,
     ProjectionDistortionDetail,
+    SemanticMapHumanEmotionItem,
     SemanticMapPoint,
     SemanticMapResponse,
 )
@@ -534,6 +535,7 @@ class SemanticMapService:
         category: Optional[str] = None,
         sentiment: Optional[str] = None,
         emotion: Optional[str] = None,
+        label_mode: Literal["human", "model"] = "human",
         search: Optional[str] = None,
         limit: int = 250,
         corpus_affect: Optional[dict[str, Any]] = None,
@@ -554,29 +556,61 @@ class SemanticMapService:
             affect = affect_map.get(rec.id)
             overlay = overlay_map.get(rec.id)
 
-            eff_sent = (
+            model_sent = (
                 ("uncertain" if affect.sentiment_is_uncertain else affect.sentiment_label.value)
                 if affect is not None
                 else None
             )
-            eff_emo = (
-                overlay.human_emotion_label.value
-                if overlay is not None and overlay.human_emotion_label is not None
-                else (affect.emotion_label.value if affect is not None else None)
+            human_sent_obj = getattr(overlay, "human_sentiment_label", None) if overlay is not None else None
+            human_sent = (
+                human_sent_obj.value
+                if human_sent_obj is not None
+                else (
+                    "uncertain"
+                    if overlay is not None and overlay.review_status.value == "flagged_uncertain"
+                    else None
+                )
             )
+            eff_sent = (
+                model_sent
+                if label_mode == "model"
+                else (human_sent if human_sent is not None else model_sent)
+            )
+
+            # Determine active emotion set depending on label_mode ('human' vs 'model')
+            active_emotions: set[str] = set()
+            if label_mode == "model":
+                if affect is not None:
+                    active_emotions.add(affect.emotion_label.value)
+            else:
+                human_dist = (
+                    getattr(overlay, "human_emotion_distribution", None)
+                    if overlay is not None
+                    else None
+                )
+                if human_dist:
+                    active_emotions.update(
+                        d.emotion.value for d in human_dist if float(d.percentage) > 0.0
+                    )
+                elif overlay is not None and overlay.human_emotion_label is not None:
+                    active_emotions.add(overlay.human_emotion_label.value)
+                elif affect is not None:
+                    active_emotions.add(affect.emotion_label.value)
 
             if sentiment is not None and sentiment != "" and eff_sent != sentiment:
                 continue
 
-            if emotion is not None and emotion != "" and eff_emo != emotion:
+            if emotion is not None and emotion != "" and emotion not in active_emotions:
                 continue
 
             if search_term is not None:
+                emo_tokens = " ".join(sorted(active_emotions))
                 haystack_match = (
                     search_term in rec.text.lower()
                     or search_term in rec.id.lower()
                     or search_term in rec.category.lower()
-                    or search_term in (eff_emo or "").lower()
+                    or search_term in emo_tokens.lower()
+                    or search_term in (eff_sent or "").lower()
                 )
                 if not haystack_match:
                     continue
@@ -625,6 +659,11 @@ class SemanticMapService:
             )
             affect = affect_map.get(rec.id)
             overlay = overlay_map.get(rec.id)
+            raw_human_dist = (
+                getattr(overlay, "human_emotion_distribution", None)
+                if overlay is not None
+                else None
+            ) or []
             points.append(
                 SemanticMapPoint(
                     id=rec.id,
@@ -648,6 +687,24 @@ class SemanticMapService:
                         overlay.human_emotion_label.value
                         if overlay is not None and overlay.human_emotion_label is not None
                         else None
+                    ),
+                    human_emotion_distribution=[
+                        SemanticMapHumanEmotionItem(
+                            emotion=d.emotion.value,
+                            percentage=float(d.percentage),
+                        )
+                        for d in raw_human_dist
+                    ],
+                    human_sentiment_label=(
+                        overlay.human_sentiment_label.value
+                        if overlay is not None
+                        and getattr(overlay, "human_sentiment_label", None) is not None
+                        else None
+                    ),
+                    confirmed_for_evaluation=(
+                        bool(overlay.confirmed_for_evaluation)
+                        if overlay is not None
+                        else False
                     ),
                     emotion_review_status=(
                         overlay.review_status.value if overlay is not None else "unreviewed"

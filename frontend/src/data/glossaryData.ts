@@ -634,13 +634,24 @@ export const GLOSSARY_ENTRIES: GlossaryEntry[] = [
   {
     id: 'aff-human-label',
     category: 'affect',
-    parameterName: 'Human-Confirmed Label',
+    parameterName: 'Human-Confirmed Distribution',
     simpleExplanation:
-      'An optional reviewer correction or confirmation stored alongside the AI prediction without altering the AI record.',
+      'Optional percentage breakdown assigned by a human reviewer (single emotion at 100% or mixed emotions totaling 100%) saved separately without modifying AI outputs.',
     technicalExplanation:
-      'human_emotion_label + review_status (confirmed, corrected, flagged_uncertain) + audit history persisted in SQLite backend/artifacts/emotion_reviews.db via POST /api/v1/emotions/reviews.',
-    formulaOrExample: 'actions ∈ {confirm, correct, flag_uncertain}',
-    whereUsed: ['Semantic Explorer', 'Vector Steering'],
+      'Structured list [{emotion, percentage}] totaling 100% (±1e-3, no negatives, >100, or duplicates; no silent normalization) plus derived dominant human_emotion_label persisted in backend/artifacts/emotion_reviews.db via POST /api/v1/emotions/reviews. Historical single-emotion labels resolve cleanly as 100%.',
+    formulaOrExample: '∑ pct_i = 100%,  pct_i ∈ [0, 100]   |   actions ∈ {confirm, correct, flag_uncertain}',
+    whereUsed: ['Semantic Explorer', 'Vector Steering', 'Evaluation Dashboard'],
+  },
+  {
+    id: 'aff-human-eval-integrity',
+    category: 'affect',
+    parameterName: 'Multi-Label Human Evaluation Integrity',
+    simpleExplanation:
+      'Compares unmodified AI emotion predictions against complete human percentage breakdowns while excluding uncertain or unreviewed entries from accuracy scores.',
+    technicalExplanation:
+      'GET /api/v1/emotions/evaluation-summary treats human percentages as annotator target proportions (never classifier confidence), evaluates dominant top-1 agreement, multi-label target coverage (predicted emotion ∈ human active set), and soft histogram overlap strictly across confirmed/corrected records.',
+    formulaOrExample: 'Included: {confirmed, corrected}  |  Excluded: {flagged_uncertain, unreviewed}',
+    whereUsed: ['Evaluation Dashboard', 'Semantic Explorer'],
   },
   {
     id: 'aff-original-pred',

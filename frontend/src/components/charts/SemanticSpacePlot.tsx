@@ -7,27 +7,26 @@ import type {
   Coordinate3D,
   EmotionCategory,
   EvaluationStep,
+  HumanEmotionDistributionItem,
+  HumanSentimentLabel,
   NearestNeighborItem,
+  ReviewStatus,
   SemanticMapPoint,
   SemanticMapResponse,
 } from '@/types/api';
+import {
+  EMOTION_COLOR_MAP,
+  formatEmotionDisplay,
+  formatEmotionDistributionSummary,
+  formatSentimentDisplay,
+  hasMultipleEmotions,
+} from '@/utils/emotionDistribution';
 import { formatNumber, formatSigned } from '@/utils/format';
+
+export { EMOTION_COLOR_MAP };
 
 export type SpaceViewMode = '2d' | '3d';
 export type RelationshipLayoutMode = 'umap' | 'radial';
-
-export const EMOTION_COLOR_MAP: Record<EmotionCategory, { color: string; label: string }> = {
-  joy: { color: '#D97706', label: 'Joy / Happiness' },
-  sadness: { color: '#2563EB', label: 'Sadness' },
-  anger: { color: '#DC2626', label: 'Anger' },
-  fear: { color: '#7C3AED', label: 'Fear' },
-  surprise: { color: '#0891B2', label: 'Surprise' },
-  disgust: { color: '#65A30D', label: 'Disgust' },
-  love: { color: '#BE185D', label: 'Love' },
-  neutral: { color: '#64748B', label: 'Neutral' },
-  other: { color: '#0F766E', label: 'Other' },
-  uncertain: { color: '#B45309', label: 'Uncertain' },
-};
 
 export interface HighlightPoint {
   label: string;
@@ -35,8 +34,14 @@ export interface HighlightPoint {
   coordinates: Coordinate3D;
   conceptScore?: number;
   emotion?: EmotionCategory | null;
+  humanEmotion?: EmotionCategory | null;
+  humanDistribution?: HumanEmotionDistributionItem[];
+  humanSentiment?: HumanSentimentLabel | null;
+  reviewStatus?: ReviewStatus | null;
   sentiment?: string | null;
 }
+
+export type GraphEmotionView = 'model' | 'human';
 
 export interface SemanticSpacePlotProps {
   mode: SpaceViewMode;
@@ -50,11 +55,102 @@ export interface SemanticSpacePlotProps {
   steeredNeighbors?: NearestNeighborItem[];
   trajectorySteps?: EvaluationStep[];
   colorBy?: 'category' | 'emotion';
+  onColorByChange?: (next: 'category' | 'emotion') => void;
+  emotionView?: GraphEmotionView;
+  onEmotionViewChange?: (view: GraphEmotionView) => void;
   title?: string;
   heightClassName?: string;
   emptyTitle?: string;
   emptyDescription?: string;
   onResetView?: () => void;
+}
+
+function resolveDominantHumanEmotion(params: {
+  humanEmotion?: EmotionCategory | null;
+  humanDistribution?: ReadonlyArray<{ emotion: string; percentage: number }> | null;
+  fallback?: EmotionCategory | null;
+}): EmotionCategory {
+  const valid = [...(params.humanDistribution ?? [])]
+    .filter((d) => d.percentage > 0 && d.emotion !== 'uncertain')
+    .sort((a, b) => b.percentage - a.percentage);
+  if (valid.length > 0) return valid[0].emotion as EmotionCategory;
+  if (params.humanEmotion && params.humanEmotion !== 'uncertain') return params.humanEmotion;
+  return params.fallback ?? 'neutral';
+}
+
+function formatAffectTooltipLines(params: {
+  modelEmotion?: EmotionCategory | null;
+  modelConfidence?: number | null;
+  modelSentiment?: string | null;
+  modelSentimentUncertain?: boolean | null;
+  humanEmotion?: EmotionCategory | null;
+  humanDistribution?: ReadonlyArray<{ emotion: string; percentage: number }> | null;
+  humanSentiment?: string | null;
+  reviewStatus?: ReviewStatus | null;
+}): string {
+  const modelLine = params.modelEmotion
+    ? `<br>Model Prediction (Immutable): <b>${formatEmotionDisplay(params.modelEmotion)}</b>` +
+      (params.modelConfidence != null ? ` (${(params.modelConfidence * 100).toFixed(1)}%)` : '')
+    : '';
+
+  const modelSentLine = params.modelSentiment
+    ? `<br>Model Sentiment (Immutable): <b>${
+        params.modelSentimentUncertain
+          ? `Uncertain (${formatSentimentDisplay(params.modelSentiment)})`
+          : formatSentimentDisplay(params.modelSentiment)
+      }</b>`
+    : '';
+
+  let humanLine = '';
+  if (params.reviewStatus === 'flagged_uncertain') {
+    humanLine =
+      '<br>Human Verification: <b style="color:#B45309">Flagged Uncertain</b> (excluded from confirmed emotions)';
+  } else if (!params.reviewStatus || params.reviewStatus === 'unreviewed') {
+    humanLine = '<br>Human Verification: <span style="color:#64748B">Unreviewed (AI baseline only)</span>';
+  } else if (params.humanDistribution && params.humanDistribution.length > 0) {
+    const distText = formatEmotionDistributionSummary(params.humanDistribution);
+    const mixedTag = hasMultipleEmotions(params.humanDistribution) ? ' · Mixed Emotion' : '';
+    humanLine = `<br>Human-Confirmed Emotion${mixedTag}: <b style="color:#0F766E">${distText}</b> ✓`;
+  } else if (params.humanEmotion && params.humanEmotion !== 'uncertain') {
+    humanLine = `<br>Human-Confirmed Emotion: <b style="color:#0F766E">${formatEmotionDisplay(params.humanEmotion)} 100%</b> ✓`;
+  }
+
+  const humanSentLine =
+    params.reviewStatus === 'flagged_uncertain'
+      ? '<br>Human-Confirmed Sentiment: <b style="color:#B45309">Uncertain</b>'
+      : params.humanSentiment
+      ? `<br>Human-Confirmed Sentiment: <b style="color:#0F766E">${formatSentimentDisplay(params.humanSentiment)}</b>`
+      : '';
+
+  return `${modelLine}${modelSentLine}${humanLine}${humanSentLine}`;
+}
+
+function resolvePointColorForView(params: {
+  view: GraphEmotionView;
+  modelEmotion?: EmotionCategory | null;
+  humanEmotion?: EmotionCategory | null;
+  humanDistribution?: ReadonlyArray<{ emotion: string; percentage: number }> | null;
+  reviewStatus?: ReviewStatus | null;
+  fallbackColor: string;
+}): string {
+  if (params.view === 'model') {
+    return params.modelEmotion
+      ? EMOTION_COLOR_MAP[params.modelEmotion]?.color ?? params.fallbackColor
+      : params.fallbackColor;
+  }
+  if (params.reviewStatus === 'flagged_uncertain') {
+    return EMOTION_COLOR_MAP.uncertain.color;
+  }
+  if (!params.reviewStatus || params.reviewStatus === 'unreviewed') {
+    return '#94A3B8';
+  }
+  // Confirmed / corrected points use canonical dominant emotion color matching legend
+  const dominant = resolveDominantHumanEmotion({
+    humanEmotion: params.humanEmotion,
+    humanDistribution: params.humanDistribution,
+    fallback: params.modelEmotion,
+  });
+  return EMOTION_COLOR_MAP[dominant]?.color ?? params.fallbackColor;
 }
 
 function truncateText(text: string | undefined | null, maxLen = 72): string {
@@ -186,6 +282,9 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
   steeredNeighbors,
   trajectorySteps,
   colorBy = 'category',
+  onColorByChange,
+  emotionView: controlledEmotionView,
+  onEmotionViewChange,
   title,
   heightClassName = 'h-[460px]',
   emptyTitle = 'No Semantic Points to Display',
@@ -198,6 +297,16 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
   const [showHighlightedLinks, setShowHighlightedLinks] = useState<boolean>(true);
   const [relationshipLayout, setRelationshipLayout] =
     useState<RelationshipLayoutMode>('umap');
+  // Dual-view toggle: 'human' uses Human-Confirmed Results; 'model' uses AI Model Predictions
+  const [internalEmotionView, setInternalEmotionView] = useState<GraphEmotionView>('human');
+  const graphEmotionView: GraphEmotionView = controlledEmotionView ?? internalEmotionView;
+  const setGraphEmotionView = (next: GraphEmotionView) => {
+    setInternalEmotionView(next);
+    if (colorBy !== 'emotion') {
+      onColorByChange?.('emotion');
+    }
+    onEmotionViewChange?.(next);
+  };
 
   const hasActiveNeighbors = Boolean(
     (originalNeighbors && originalNeighbors.length > 0) ||
@@ -209,28 +318,55 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
   const effectiveLayout: RelationshipLayoutMode =
     hasActiveNeighbors && relationshipLayout === 'radial' ? 'radial' : 'umap';
 
-  // Build deterministic revision keys so Plotly always re-draws when coordinates/inputs change
-  const activeVectorKey = useMemo(() => {
-    const origKey = originalPoint
+  // Geometry-only key keeps Plotly camera viewport (uirevision) stable across label/review edits
+  const geometryVectorKey = useMemo(() => {
+    const origGeo = originalPoint
       ? `${originalPoint.coordinates.x}:${originalPoint.coordinates.y}:${originalPoint.coordinates.z}:${originalPoint.text}`
       : 'none';
-    const steerKey = steeredPoint
+    const steerGeo = steeredPoint
       ? `${steeredPoint.coordinates.x}:${steeredPoint.coordinates.y}:${steeredPoint.coordinates.z}:${steeredPoint.label}`
       : 'none';
-    const trajKey = trajectorySteps?.length
+    const trajGeo = trajectorySteps?.length
       ? `${trajectorySteps.length}:${trajectorySteps[0].coordinates.x}:${trajectorySteps[trajectorySteps.length - 1].coordinates.x}`
       : '0';
-    return `${origKey}|${steerKey}|${trajKey}`;
+    return `${origGeo}|${steerGeo}|${trajGeo}`;
   }, [originalPoint, steeredPoint, trajectorySteps]);
+
+  // Build deterministic revision keys so Plotly always re-draws when coordinates, distributions, or sentiments change
+  const activeVectorKey = useMemo(() => {
+    const origDistKey = (originalPoint?.humanDistribution ?? [])
+      .map((d) => `${d.emotion}=${d.percentage}`)
+      .join(',');
+    const origKey = originalPoint
+      ? `${geometryVectorKey}:${originalPoint.emotion ?? ''}:${originalPoint.humanEmotion ?? ''}:${originalPoint.humanSentiment ?? ''}:${originalPoint.reviewStatus ?? ''}:${origDistKey}`
+      : geometryVectorKey;
+    return origKey;
+  }, [geometryVectorKey, originalPoint]);
 
   const dataSignature = useMemo(() => {
     const pts = visiblePoints ?? semanticMap?.points ?? [];
-    const ptsKey = `${pts.length}:${pts[0]?.id ?? ''}:${pts[pts.length - 1]?.id ?? ''}`;
-    return `${mode}|${effectiveLayout}|${colorBy}|${showHighlightedLinks ? 'links' : 'nolinks'}|${focusActiveVector ? 'focus' : 'full'}|${ptsKey}|${selectedCorpusPointId ?? ''}|${activeVectorKey}`;
+    const humanSig = pts
+      .filter(
+        (p) =>
+          p.emotion_review_status &&
+          p.emotion_review_status !== 'unreviewed'
+      )
+      .map(
+        (p) =>
+          `${p.id}:${p.emotion_review_status}:${p.human_emotion_label ?? ''}:${p.human_sentiment_label ?? ''}:${(
+            p.human_emotion_distribution ?? []
+          )
+            .map((d) => `${d.emotion}=${d.percentage}`)
+            .join(',')}`
+      )
+      .join(';');
+    const ptsKey = `${pts.length}:${pts[0]?.id ?? ''}:${pts[pts.length - 1]?.id ?? ''}:${humanSig}`;
+    return `${mode}|${effectiveLayout}|${colorBy}|${graphEmotionView}|${showHighlightedLinks ? 'links' : 'nolinks'}|${focusActiveVector ? 'focus' : 'full'}|${ptsKey}|${selectedCorpusPointId ?? ''}|${activeVectorKey}`;
   }, [
     mode,
     effectiveLayout,
     colorBy,
+    graphEmotionView,
     showHighlightedLinks,
     focusActiveVector,
     visiblePoints,
@@ -254,12 +390,24 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
       const selectedCorpus = selectedCorpusPointId
         ? points.find((p) => p.id === selectedCorpusPointId) ?? null
         : null;
-      const baseAnchor = originalPoint ?? (selectedCorpus ? {
-        label: `Selected (${selectedCorpus.id})`,
-        text: selectedCorpus.text,
-        coordinates: selectedCorpus.coordinates,
-        emotion: (selectedCorpus.human_emotion_label ?? selectedCorpus.emotion_label ?? null) as EmotionCategory | null,
-      } : null);
+      const baseAnchor: HighlightPoint | null =
+        originalPoint ??
+        (selectedCorpus
+          ? {
+              label: `Selected (${selectedCorpus.id})`,
+              text: selectedCorpus.text,
+              coordinates: selectedCorpus.coordinates,
+              emotion: selectedCorpus.emotion_label ?? null,
+              humanEmotion: selectedCorpus.human_emotion_label ?? null,
+              humanDistribution: (selectedCorpus.human_emotion_distribution ?? []).map((d) => ({
+                emotion: d.emotion as EmotionCategory,
+                percentage: d.percentage,
+              })),
+              humanSentiment: selectedCorpus.human_sentiment_label ?? null,
+              sentiment: selectedCorpus.sentiment_label ?? null,
+              reviewStatus: selectedCorpus.emotion_review_status ?? null,
+            }
+          : null);
 
       // 1. Subdued background corpus points normalized around outer ring context
       if (points.length > 0) {
@@ -410,18 +558,29 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
       if (origList.length > 0) {
         const hover = origList.map((n) => {
           const meta = pointMetaById.get(n.id);
-          const emo = meta?.human_emotion_label ?? meta?.emotion_label;
           return (
             `<b>Neighbor (${n.category})</b><br>${truncateText(n.text)}` +
             `<br>384D Cosine Sim: ${formatNumber(n.cosine_similarity, 4)}` +
-            (emo ? `<br>Emotion: ${EMOTION_COLOR_MAP[emo]?.label ?? emo}` : '') +
+            formatAffectTooltipLines({
+              modelEmotion: meta?.emotion_label,
+              modelConfidence: meta?.emotion_confidence,
+              humanEmotion: meta?.human_emotion_label,
+              humanDistribution: meta?.human_emotion_distribution,
+              reviewStatus: meta?.emotion_review_status,
+            }) +
             `<br>Original UMAP: (${formatNumber(n.coordinates.x, 3)}, ${formatNumber(n.coordinates.y, 3)}, ${formatNumber(n.coordinates.z, 3)})`
           );
         });
         const colors = origList.map((n) => {
           const meta = pointMetaById.get(n.id);
-          const emo = meta?.human_emotion_label ?? meta?.emotion_label;
-          return emo ? EMOTION_COLOR_MAP[emo]?.color ?? '#3E5C8A' : '#3E5C8A';
+          return resolvePointColorForView({
+            view: graphEmotionView,
+            modelEmotion: meta?.emotion_label,
+            humanEmotion: meta?.human_emotion_label,
+            humanDistribution: meta?.human_emotion_distribution,
+            reviewStatus: meta?.emotion_review_status,
+            fallbackColor: '#3E5C8A',
+          });
         });
         if (is3D) {
           result.push({
@@ -488,12 +647,22 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
       }
 
       if (baseAnchor) {
-        const centerColor = baseAnchor.emotion
-          ? EMOTION_COLOR_MAP[baseAnchor.emotion]?.color ?? '#1B2E4B'
-          : '#1B2E4B';
+        const centerColor = resolvePointColorForView({
+          view: graphEmotionView,
+          modelEmotion: baseAnchor.emotion,
+          humanEmotion: baseAnchor.humanEmotion,
+          humanDistribution: baseAnchor.humanDistribution,
+          reviewStatus: baseAnchor.reviewStatus,
+          fallbackColor: '#1B2E4B',
+        });
         const centerHover =
           `<b>${baseAnchor.label}</b><br>${truncateText(baseAnchor.text)}` +
-          (baseAnchor.emotion ? `<br>Emotion: ${EMOTION_COLOR_MAP[baseAnchor.emotion]?.label ?? baseAnchor.emotion}` : '') +
+          formatAffectTooltipLines({
+            modelEmotion: baseAnchor.emotion,
+            humanEmotion: baseAnchor.humanEmotion,
+            humanDistribution: baseAnchor.humanDistribution,
+            reviewStatus: baseAnchor.reviewStatus,
+          }) +
           `<br>UMAP Coords: (${formatNumber(baseAnchor.coordinates.x, 3)}, ${formatNumber(baseAnchor.coordinates.y, 3)}, ${formatNumber(baseAnchor.coordinates.z, 3)})`;
         if (is3D) {
           result.push({
@@ -565,43 +734,157 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
     if (points.length > 0) {
       const grouped = new Map<string, SemanticMapPoint[]>();
       for (const pt of points) {
-        const key =
-          colorBy === 'emotion'
-            ? pt.human_emotion_label || pt.emotion_label || 'neutral'
-            : pt.category || 'uncategorized';
+        let key: string;
+        if (colorBy === 'emotion') {
+          if (graphEmotionView === 'human') {
+            if (pt.emotion_review_status === 'flagged_uncertain') {
+              key = '__uncertain__';
+            } else if (!pt.emotion_review_status || pt.emotion_review_status === 'unreviewed') {
+              key = '__unreviewed__';
+            } else {
+              key = resolveDominantHumanEmotion({
+                humanEmotion: pt.human_emotion_label,
+                humanDistribution: pt.human_emotion_distribution,
+                fallback: pt.emotion_label ?? 'neutral',
+              });
+            }
+          } else {
+            key = pt.emotion_label || 'neutral';
+          }
+        } else {
+          key = pt.category || 'uncategorized';
+        }
         const list = grouped.get(key) ?? [];
         list.push(pt);
         grouped.set(key, list);
       }
 
-      grouped.forEach((groupPoints, groupKey) => {
+      const orderedKeys = Array.from(grouped.keys()).sort((a, b) => {
+        if (a === '__unreviewed__') return 1;
+        if (b === '__unreviewed__') return -1;
+        if (a === '__uncertain__') return 1;
+        if (b === '__uncertain__') return -1;
+        return a.localeCompare(b);
+      });
+
+      orderedKeys.forEach((groupKey) => {
+        const groupPoints = grouped.get(groupKey) ?? [];
+        const isUnreviewedGroup = colorBy === 'emotion' && graphEmotionView === 'human' && groupKey === '__unreviewed__';
+        const isUncertainGroup = colorBy === 'emotion' && graphEmotionView === 'human' && groupKey === '__uncertain__';
         const clusterMeta = clusters.find((c) => c.id === groupKey);
         const emoMeta =
-          colorBy === 'emotion'
+          colorBy === 'emotion' && !isUnreviewedGroup && !isUncertainGroup
             ? EMOTION_COLOR_MAP[groupKey as EmotionCategory]
             : undefined;
-        const color = emoMeta?.color || clusterMeta?.color || '#64748b';
-        const label = emoMeta?.label || clusterMeta?.label || groupKey;
+        const color = isUnreviewedGroup
+          ? 'rgba(148, 163, 184, 0.42)'
+          : isUncertainGroup
+          ? EMOTION_COLOR_MAP.uncertain.color
+          : emoMeta?.color || clusterMeta?.color || '#64748b';
+        const baseLabel = isUnreviewedGroup
+          ? 'Unreviewed (AI Baseline)'
+          : isUncertainGroup
+          ? 'Flagged Uncertain (Excluded)'
+          : emoMeta?.label || clusterMeta?.label || groupKey;
+        const label = `${baseLabel} (${groupPoints.length})`;
 
         const hoverTexts = groupPoints.map((p) => {
-          const effEmo = p.human_emotion_label || p.emotion_label;
-          const emoStr = effEmo
-            ? `<br>Emotion: <b>${EMOTION_COLOR_MAP[effEmo]?.label ?? effEmo}</b>${p.human_emotion_label ? ' (verified)' : ''}`
-            : '';
-          const sentStr = p.sentiment_label
-            ? ` | Sentiment Polarity: ${p.sentiment_is_uncertain ? 'uncertain' : p.sentiment_label}`
-            : '';
+          const affectLines = formatAffectTooltipLines({
+            modelEmotion: p.emotion_label,
+            modelConfidence: p.emotion_confidence,
+            modelSentiment: p.sentiment_label,
+            modelSentimentUncertain: p.sentiment_is_uncertain,
+            humanEmotion: p.human_emotion_label,
+            humanDistribution: p.human_emotion_distribution,
+            humanSentiment: p.human_sentiment_label,
+            reviewStatus: p.emotion_review_status,
+          });
           return (
-            `<b>${label}</b><br>` +
+            `<b>${baseLabel}</b><br>` +
             `${truncateText(p.text)}<br>` +
             `Coords: (${formatNumber(p.coordinates?.x, 3)}, ${formatNumber(p.coordinates?.y, 3)}, ${formatNumber(p.coordinates?.z, 3)})` +
-            emoStr +
-            sentStr +
+            affectLines +
             `<br>Concept Scores: S=${formatNumber(p.concept_scores?.positive_sentiment, 3)} | T=${formatNumber(p.concept_scores?.technical_tone, 3)} | F=${formatNumber(p.concept_scores?.formal_tone, 3)}`
           );
         });
 
+        // In Human-Confirmed Results mode: confirmed/corrected points use canonical dominant emotion color,
+        // mixed-emotion points render with diamond markers + dark ring outline, unreviewed is subdued, uncertain is marked distinctly.
+        const useConfirmedHumanStyling =
+          colorBy === 'emotion' &&
+          graphEmotionView === 'human' &&
+          !isUnreviewedGroup &&
+          !isUncertainGroup;
+        const hasMixedInGroup =
+          useConfirmedHumanStyling &&
+          groupPoints.some((p) => hasMultipleEmotions(p.human_emotion_distribution));
+
+        const perPointLineColors2D = isUnreviewedGroup
+          ? '#64748B'
+          : isUncertainGroup
+          ? '#78350F'
+          : hasMixedInGroup
+          ? groupPoints.map((p) =>
+              hasMultipleEmotions(p.human_emotion_distribution) ? '#132033' : '#FFFFFF'
+            )
+          : '#FFFFFF';
+        const perPointLineWidths2D = isUnreviewedGroup
+          ? 1.2
+          : isUncertainGroup
+          ? 1.8
+          : hasMixedInGroup
+          ? groupPoints.map((p) => (hasMultipleEmotions(p.human_emotion_distribution) ? 2.4 : 1.2))
+          : 1.2;
+        const perPointSymbols2D = isUncertainGroup
+          ? 'x'
+          : hasMixedInGroup && points.length <= 500
+          ? groupPoints.map((p) =>
+              hasMultipleEmotions(p.human_emotion_distribution) ? 'diamond' : 'circle'
+            )
+          : 'circle';
+        const perPointSymbols3D = isUncertainGroup
+          ? 'cross'
+          : hasMixedInGroup
+          ? groupPoints.map((p) =>
+              hasMultipleEmotions(p.human_emotion_distribution) ? 'diamond' : 'circle'
+            )
+          : 'circle';
+
         const hasFocus = hasActiveOverlay || Boolean(selectedCorpusPointId && hasActiveNeighbors);
+        const baseOpacity2D = isUnreviewedGroup ? (hasFocus ? 0.2 : 0.65) : hasFocus ? 0.3 : 0.92;
+        const baseOpacity3D = isUnreviewedGroup ? (hasFocus ? 0.18 : 0.52) : hasFocus ? 0.28 : 0.9;
+
+        const perPointSizes3D = isUnreviewedGroup
+          ? hasFocus
+            ? 3
+            : 4
+          : hasMixedInGroup
+          ? groupPoints.map((p) =>
+              hasMultipleEmotions(p.human_emotion_distribution) ? (hasFocus ? 5.5 : 8) : hasFocus ? 4 : 6
+            )
+          : useConfirmedHumanStyling
+          ? hasFocus
+            ? 4
+            : 6
+          : hasFocus
+          ? 3.5
+          : 5;
+        const perPointSizes2D = isUnreviewedGroup
+          ? hasFocus
+            ? 5
+            : 6.5
+          : hasMixedInGroup
+          ? groupPoints.map((p) =>
+              hasMultipleEmotions(p.human_emotion_distribution) ? (hasFocus ? 9.5 : 12) : hasFocus ? 7 : 9
+            )
+          : useConfirmedHumanStyling
+          ? hasFocus
+            ? 7
+            : 9
+          : hasFocus
+          ? 6
+          : 8;
+
         if (is3D) {
           result.push({
             type: 'scatter3d',
@@ -614,10 +897,11 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
             customdata: groupPoints.map((p) => p.id),
             hovertemplate: '%{text}<extra></extra>',
             marker: {
-              size: hasFocus ? 3.5 : 5,
+              size: perPointSizes3D,
               color,
-              opacity: hasFocus ? 0.2 : 0.85,
-              line: { width: 0.5, color: '#FFFFFF' },
+              symbol: perPointSymbols3D as unknown as string,
+              opacity: baseOpacity3D,
+              line: { width: isUnreviewedGroup ? 0.5 : 1.0, color: isUnreviewedGroup ? '#64748B' : '#FFFFFF' },
             },
           });
         } else {
@@ -631,10 +915,11 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
             customdata: groupPoints.map((p) => p.id),
             hovertemplate: '%{text}<extra></extra>',
             marker: {
-              size: hasFocus ? 6 : 8,
+              size: perPointSizes2D,
               color,
-              opacity: hasFocus ? 0.22 : 0.88,
-              line: { width: 1, color: '#FFFFFF' },
+              symbol: perPointSymbols2D as unknown as string,
+              opacity: baseOpacity2D,
+              line: { width: perPointLineWidths2D, color: perPointLineColors2D },
             },
           });
         }
@@ -709,14 +994,46 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
       }
     }
 
-    // 2. Selected corpus point highlight
+    // 2. Selected corpus point highlight (honors AI Model Predictions vs Human-Confirmed Results tooltip & colors)
     if (selectedCorpusPointId && points.length > 0) {
       const selected = points.find((p) => p.id === selectedCorpusPointId);
       if (selected) {
+        const selColor =
+          colorBy === 'emotion'
+            ? resolvePointColorForView({
+                view: graphEmotionView,
+                modelEmotion: selected.emotion_label,
+                humanEmotion: selected.human_emotion_label,
+                humanDistribution: selected.human_emotion_distribution,
+                reviewStatus: selected.emotion_review_status,
+                fallbackColor: '#1B2E4B',
+              })
+            : '#1B2E4B';
+        const selIsMixed =
+          colorBy === 'emotion' &&
+          graphEmotionView === 'human' &&
+          selected.emotion_review_status !== 'flagged_uncertain' &&
+          selected.emotion_review_status !== 'unreviewed' &&
+          hasMultipleEmotions(selected.human_emotion_distribution);
+        const selIsUncertain =
+          colorBy === 'emotion' &&
+          graphEmotionView === 'human' &&
+          selected.emotion_review_status === 'flagged_uncertain';
+
         const hover =
           `<b>Selected Corpus Point (${selected.id})</b><br>` +
-          `${truncateText(selected.text)}<br>` +
-          `(${formatNumber(selected.coordinates?.x, 3)}, ${formatNumber(selected.coordinates?.y, 3)}, ${formatNumber(selected.coordinates?.z, 3)})`;
+          `${truncateText(selected.text)}` +
+          formatAffectTooltipLines({
+            modelEmotion: selected.emotion_label,
+            modelConfidence: selected.emotion_confidence,
+            modelSentiment: selected.sentiment_label,
+            modelSentimentUncertain: selected.sentiment_is_uncertain,
+            humanEmotion: selected.human_emotion_label,
+            humanDistribution: selected.human_emotion_distribution,
+            humanSentiment: selected.human_sentiment_label,
+            reviewStatus: selected.emotion_review_status,
+          }) +
+          `<br>Coords: (${formatNumber(selected.coordinates?.x, 3)}, ${formatNumber(selected.coordinates?.y, 3)}, ${formatNumber(selected.coordinates?.z, 3)})`;
 
         if (is3D) {
           result.push({
@@ -729,10 +1046,10 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
             text: [hover],
             hovertemplate: '%{text}<extra></extra>',
             marker: {
-              size: 9,
-              color: '#1B2E4B',
-              symbol: 'diamond',
-              line: { width: 2, color: '#FFFFFF' },
+              size: 11,
+              color: selColor,
+              symbol: selIsUncertain ? 'cross' : selIsMixed ? 'diamond' : 'circle',
+              line: { width: 3, color: '#132033' },
             },
           });
         } else {
@@ -745,10 +1062,10 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
             text: [hover],
             hovertemplate: '%{text}<extra></extra>',
             marker: {
-              size: 14,
-              color: 'rgba(27, 46, 75, 0.16)',
-              symbol: 'circle',
-              line: { width: 2.5, color: '#1B2E4B' },
+              size: selIsMixed ? 18 : 16,
+              color: 'rgba(19, 32, 51, 0.08)',
+              symbol: selIsUncertain ? 'circle' : selIsMixed ? 'diamond' : 'circle',
+              line: { width: 3, color: '#132033' },
             },
           });
         }
@@ -923,25 +1240,84 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
         ? 'top center'
         : 'bottom center';
 
-    // 6. Original Point Marker (colored distinctly by emotion when provided)
+    // 6. Original Point Marker (honors AI Model Predictions vs Human-Confirmed Results mode)
     if (originalPoint) {
-      const emoMeta = originalPoint.emotion ? EMOTION_COLOR_MAP[originalPoint.emotion] : undefined;
-      const pointFill = emoMeta?.color ?? '#1B2E4B';
+      const modelEmoMeta = originalPoint.emotion
+        ? EMOTION_COLOR_MAP[originalPoint.emotion]
+        : undefined;
+      const activeHumanDist =
+        originalPoint.reviewStatus === 'flagged_uncertain' ||
+        originalPoint.reviewStatus === 'unreviewed' ||
+        !originalPoint.reviewStatus
+          ? []
+          : originalPoint.humanDistribution && originalPoint.humanDistribution.length > 0
+          ? originalPoint.humanDistribution
+          : originalPoint.humanEmotion && originalPoint.humanEmotion !== 'uncertain'
+          ? [{ emotion: originalPoint.humanEmotion, percentage: 100 }]
+          : [];
+      const dominantHumanEmo = resolveDominantHumanEmotion({
+        humanEmotion: originalPoint.humanEmotion,
+        humanDistribution: activeHumanDist,
+        fallback: originalPoint.emotion,
+      });
+      const isMixedHuman = hasMultipleEmotions(activeHumanDist);
+      const humanSummary =
+        originalPoint.reviewStatus === 'flagged_uncertain'
+          ? 'Flagged Uncertain (excluded)'
+          : formatEmotionDistributionSummary(activeHumanDist);
+
+      const useHumanHighlight = graphEmotionView === 'human';
+      const pointFill = resolvePointColorForView({
+        view: graphEmotionView,
+        modelEmotion: originalPoint.emotion,
+        humanEmotion: originalPoint.humanEmotion,
+        humanDistribution: activeHumanDist,
+        reviewStatus: originalPoint.reviewStatus,
+        fallbackColor: '#1B2E4B',
+      });
+
+      const displayEmoLabel = useHumanHighlight
+        ? originalPoint.reviewStatus === 'flagged_uncertain'
+          ? 'Uncertain'
+          : !originalPoint.reviewStatus || originalPoint.reviewStatus === 'unreviewed'
+          ? 'Unreviewed'
+          : humanSummary || EMOTION_COLOR_MAP[dominantHumanEmo]?.label
+        : modelEmoMeta?.label;
+
       const hover =
         `<b>${originalPoint.label}</b><br>` +
-        `${truncateText(originalPoint.text)}<br>` +
-        (emoMeta ? `Predicted Emotion: <b>${emoMeta.label}</b><br>` : '') +
-        (originalPoint.sentiment ? `Sentiment: <b>${originalPoint.sentiment}</b><br>` : '') +
-        `Coords: (${formatNumber(originalPoint.coordinates?.x, 3)}, ${formatNumber(originalPoint.coordinates?.y, 3)}, ${formatNumber(originalPoint.coordinates?.z, 3)})` +
+        `${truncateText(originalPoint.text)}` +
+        formatAffectTooltipLines({
+          modelEmotion: originalPoint.emotion,
+          modelSentiment: originalPoint.sentiment,
+          humanEmotion: originalPoint.humanEmotion,
+          humanDistribution: activeHumanDist,
+          humanSentiment: originalPoint.humanSentiment,
+          reviewStatus: originalPoint.reviewStatus,
+        }) +
+        `<br>Coords: (${formatNumber(originalPoint.coordinates?.x, 3)}, ${formatNumber(originalPoint.coordinates?.y, 3)}, ${formatNumber(originalPoint.coordinates?.z, 3)})` +
         (originalPoint.conceptScore !== undefined
           ? `<br>Concept Score: ${formatNumber(originalPoint.conceptScore, 4)}`
           : '');
+
+      const origSymbol2D =
+        useHumanHighlight && originalPoint.reviewStatus === 'flagged_uncertain'
+          ? 'x'
+          : useHumanHighlight && isMixedHuman
+          ? 'diamond'
+          : 'circle';
+      const origSymbol3D =
+        useHumanHighlight && originalPoint.reviewStatus === 'flagged_uncertain'
+          ? 'cross'
+          : useHumanHighlight && isMixedHuman
+          ? 'diamond'
+          : 'circle';
 
       if (is3D) {
         result.push({
           type: 'scatter3d',
           mode: 'text+markers',
-          name: emoMeta ? `${originalPoint.label} (${emoMeta.label})` : originalPoint.label,
+          name: displayEmoLabel ? `${originalPoint.label} (${displayEmoLabel})` : originalPoint.label,
           x: [originalPoint.coordinates.x],
           y: [originalPoint.coordinates.y],
           z: [originalPoint.coordinates.z],
@@ -953,7 +1329,7 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
           marker: {
             size: 11.5,
             color: pointFill,
-            symbol: 'circle',
+            symbol: origSymbol3D,
             line: { width: 3, color: '#132033' },
           },
         });
@@ -961,7 +1337,7 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
         result.push({
           type: 'scatter',
           mode: 'text+markers',
-          name: emoMeta ? `${originalPoint.label} (${emoMeta.label})` : originalPoint.label,
+          name: displayEmoLabel ? `${originalPoint.label} (${displayEmoLabel})` : originalPoint.label,
           x: [originalPoint.coordinates.x],
           y: [originalPoint.coordinates.y],
           text: [originalPoint.label],
@@ -972,7 +1348,7 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
           marker: {
             size: 16,
             color: pointFill,
-            symbol: 'circle',
+            symbol: origSymbol2D,
             line: { width: 3, color: '#132033' },
           },
         });
@@ -1043,6 +1419,7 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
     trajectorySteps,
     is3D,
     colorBy,
+    graphEmotionView,
     showHighlightedLinks,
     effectiveLayout,
     hasActiveNeighbors,
@@ -1099,7 +1476,7 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
 
   const layout = useMemo<Partial<Layout>>(() => {
     const base: Partial<Layout> = {
-      uirevision: `${mode}:${effectiveLayout}:${colorBy}:${focusActiveVector ? 'focus' : 'full'}:${viewResetCount}:${activeVectorKey}`,
+      uirevision: `${mode}:${effectiveLayout}:${focusActiveVector ? 'focus' : 'full'}:${viewResetCount}:${geometryVectorKey}`,
       datarevision: dataSignature,
       title: title
         ? {
@@ -1216,10 +1593,9 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
     is3D,
     mode,
     effectiveLayout,
-    colorBy,
     focusActiveVector,
     viewResetCount,
-    activeVectorKey,
+    geometryVectorKey,
     dataSignature,
     title,
     originalPoint,
@@ -1370,6 +1746,37 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
             <RotateCcw className="w-3 h-3" />
             <span>Reset View</span>
           </button>
+          <div
+            role="group"
+            aria-label="Graph Visualization Mode"
+            className="inline-flex rounded-lg border border-border bg-background-surface p-0.5"
+            title="Switch between AI Model Predictions (immutable baseline) and Human-Confirmed Results"
+          >
+            <button
+              type="button"
+              aria-pressed={colorBy === 'emotion' && graphEmotionView === 'model'}
+              onClick={() => setGraphEmotionView('model')}
+              className={`inline-flex items-center gap-1 rounded-md px-2.5 py-0.5 text-[11px] font-medium transition-colors ${
+                colorBy === 'emotion' && graphEmotionView === 'model'
+                  ? 'bg-brand-navy text-white'
+                  : 'text-text-secondary hover:text-brand-navy'
+              }`}
+            >
+              <span>AI Model Predictions</span>
+            </button>
+            <button
+              type="button"
+              aria-pressed={colorBy === 'emotion' && graphEmotionView === 'human'}
+              onClick={() => setGraphEmotionView('human')}
+              className={`inline-flex items-center gap-1 rounded-md px-2.5 py-0.5 text-[11px] font-medium transition-colors ${
+                colorBy === 'emotion' && graphEmotionView === 'human'
+                  ? 'bg-brand-teal text-white'
+                  : 'text-text-secondary hover:text-brand-navy'
+              }`}
+            >
+              <span>Human-Confirmed Results</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -1397,16 +1804,48 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
           </span>
           <span className="inline-flex items-center gap-1.5 text-brand-teal font-medium">
             <span className="w-2 h-2 rotate-45 bg-[#0F766E] inline-block" />
-            Steered (λ≠0.0)
+            Steered / Mixed (Diamond)
           </span>
           <span className="inline-flex items-center gap-1.5">
             <span className="w-2 h-2 rounded-full border border-[#1B2E4B] inline-block" />
             Top-K 384D Neighbors
           </span>
+          {colorBy === 'emotion' && graphEmotionView === 'human' && (
+            <span className="inline-flex items-center gap-1.5 font-mono text-[10.5px] text-brand-navy">
+              {(() => {
+                const activePts = visiblePoints ?? semanticMap?.points ?? [];
+                const confirmedCnt = activePts.filter(
+                  (p) =>
+                    p.emotion_review_status === 'confirmed' ||
+                    p.emotion_review_status === 'corrected'
+                ).length;
+                const mixedCnt = activePts.filter(
+                  (p) =>
+                    (p.emotion_review_status === 'confirmed' ||
+                      p.emotion_review_status === 'corrected') &&
+                    hasMultipleEmotions(p.human_emotion_distribution)
+                ).length;
+                const uncertainCnt = activePts.filter(
+                  (p) => p.emotion_review_status === 'flagged_uncertain'
+                ).length;
+                const unreviewedCnt = activePts.length - confirmedCnt - uncertainCnt;
+                return `${confirmedCnt} confirmed (${mixedCnt} mixed) · ${uncertainCnt} uncertain · ${unreviewedCnt} unreviewed`;
+              })()}
+            </span>
+          )}
         </div>
         <p className="leading-relaxed sm:text-right">
-          Colors mark corpus reference categories (not statistically validated clusters). UMAP
-          distances approximate 384D geometry; cosine math executes in 384D.
+          UMAP coordinates remain immutable across annotations; cosine math executes in 384D.
+          {colorBy === 'emotion' && (
+            <>
+              {' '}
+              <span className="font-medium">
+                {graphEmotionView === 'human'
+                  ? 'Human-Confirmed Results mode active: dominant human emotion sets color; diamonds mark mixed emotions; unreviewed and uncertain points are separated.'
+                  : 'AI Model Predictions mode active: original immutable classifier emotion & sentiment labels only.'}
+              </span>
+            </>
+          )}
         </p>
       </div>
     </div>

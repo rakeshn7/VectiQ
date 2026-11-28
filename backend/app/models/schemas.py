@@ -144,6 +144,13 @@ class ClusterSummary(BaseModel):
     point_count: int
 
 
+class SemanticMapHumanEmotionItem(BaseModel):
+    """Compact emotion-percentage entry attached to semantic map corpus points."""
+
+    emotion: str
+    percentage: float = Field(..., ge=0.0, le=100.0)
+
+
 class SemanticMapPoint(BaseModel):
     """Single reference corpus point in the semantic map."""
 
@@ -161,6 +168,9 @@ class SemanticMapPoint(BaseModel):
     emotion_confidence: Optional[float] = None
     emotion_is_uncertain: Optional[bool] = None
     human_emotion_label: Optional[str] = None
+    human_emotion_distribution: list[SemanticMapHumanEmotionItem] = Field(default_factory=list)
+    human_sentiment_label: Optional[str] = None
+    confirmed_for_evaluation: bool = False
     emotion_review_status: Optional[str] = None
 
 

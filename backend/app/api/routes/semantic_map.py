@@ -1,6 +1,6 @@
 """Semantic map API route."""
 
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, Query
 
@@ -29,11 +29,15 @@ def get_semantic_map(
     ),
     sentiment: Optional[str] = Query(
         None,
-        description="Optional sentiment polarity filter (positive, neutral, negative, uncertain).",
+        description="Optional sentiment polarity filter (positive, neutral, negative, mixed, uncertain).",
     ),
     emotion: Optional[str] = Query(
         None,
         description="Optional emotion filter (joy, sadness, anger, fear, surprise, disgust, love, neutral, other, uncertain).",
+    ),
+    label_mode: Literal["human", "model"] = Query(
+        "human",
+        description="Whether emotion and sentiment filters use Human-Confirmed Results ('human', default) or AI Model Predictions ('model').",
     ),
     search: Optional[str] = Query(
         None,
@@ -55,6 +59,7 @@ def get_semantic_map(
         category=category,
         sentiment=sentiment,
         emotion=emotion,
+        label_mode=label_mode,
         search=search,
         limit=limit,
         corpus_affect=container.affect_analysis_service.corpus_affect,

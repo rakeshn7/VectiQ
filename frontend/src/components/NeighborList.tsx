@@ -1,7 +1,12 @@
 import React, { useState } from 'react';
 import { ChevronDown, ChevronUp, SlidersHorizontal } from 'lucide-react';
 import { Badge } from '@/components/ui';
-import type { EmotionCategory, NearestNeighborItem } from '@/types/api';
+import type {
+  EmotionCategory,
+  HumanEmotionDistributionItem,
+  NearestNeighborItem,
+} from '@/types/api';
+import { formatEmotionDisplay, formatEmotionDistributionSummary } from '@/utils/emotionDistribution';
 import { formatCoordinates, formatNumber } from '@/utils/format';
 import { cn } from '@/utils/cn';
 
@@ -9,6 +14,7 @@ export interface NeighborEmotionMeta {
   emotionLabel?: EmotionCategory | null;
   rawLabel?: string | null;
   humanLabel?: EmotionCategory | null;
+  humanDistribution?: HumanEmotionDistributionItem[];
 }
 
 export interface NeighborListProps {
@@ -72,11 +78,18 @@ export const NeighborList: React.FC<NeighborListProps> = ({
                 <Badge variant={accent === 'violet' ? 'violet' : 'cyan'}>{item.category}</Badge>
                 {(() => {
                   const meta = emotionLookup?.[item.id];
+                  if (meta?.humanDistribution && meta.humanDistribution.length > 0) {
+                    return (
+                      <Badge variant="neutral">
+                        {formatEmotionDistributionSummary(meta.humanDistribution)} (verified)
+                      </Badge>
+                    );
+                  }
                   const activeEmo = meta?.humanLabel ?? meta?.emotionLabel;
                   if (!activeEmo) return null;
                   return (
                     <Badge variant="neutral" className="capitalize">
-                      {activeEmo === 'joy' ? 'joy / happiness' : activeEmo}
+                      {formatEmotionDisplay(activeEmo)}
                       {meta?.humanLabel ? ' (verified)' : ''}
                     </Badge>
                   );

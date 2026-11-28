@@ -1,28 +1,34 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, ChevronDown, ChevronUp, Info, UserCheck } from 'lucide-react';
+import { ChevronDown, ChevronUp, Info } from 'lucide-react';
 import { EMOTION_COLOR_MAP } from '@/components/charts';
-import { Badge, Button, ErrorAlert, Input, LoadingState, Select } from '@/components/ui';
-import { parseApiError, submitEmotionVerification, type ParsedApiError } from '@/services';
+import {
+  HumanConfirmedDistributionSection,
+  HumanVerificationEditor,
+} from '@/components/HumanEmotionVerification';
+import { Badge, ErrorAlert, LoadingState } from '@/components/ui';
+import {
+  fetchEmotionVerification,
+  parseApiError,
+  submitEmotionVerification,
+  type ParsedApiError,
+} from '@/services';
 import type {
   EmotionAnalyzeResponse,
   EmotionCategory,
+  EmotionReviewHistoryItem,
+  HumanEmotionDistributionItem,
   HumanEmotionOverlay,
+  HumanSentimentLabel,
   ReviewAction,
 } from '@/types/api';
-import { formatTimestamp } from '@/utils/format';
+import {
+  formatEmotionDisplay,
+  formatEmotionDistributionSummary,
+  formatSentimentDisplay,
+  sentimentVariant,
+} from '@/utils/emotionDistribution';
 
-export const EMOTION_SELECT_OPTIONS: Array<{ value: EmotionCategory; label: string }> = [
-  { value: 'joy', label: 'Joy / Happiness' },
-  { value: 'sadness', label: 'Sadness' },
-  { value: 'anger', label: 'Anger' },
-  { value: 'fear', label: 'Fear' },
-  { value: 'surprise', label: 'Surprise' },
-  { value: 'disgust', label: 'Disgust' },
-  { value: 'love', label: 'Love' },
-  { value: 'neutral', label: 'Neutral' },
-  { value: 'other', label: 'Other Nuanced' },
-  { value: 'uncertain', label: 'Uncertain' },
-];
+export { formatEmotionDisplay, EMOTION_SELECT_OPTIONS, sentimentVariant } from '@/utils/emotionDistribution';
 
 const CORE_CANONICAL_EMOTIONS = new Set<string>([
   'love',
@@ -35,41 +41,23 @@ const CORE_CANONICAL_EMOTIONS = new Set<string>([
   'neutral',
 ]);
 
-export function formatEmotionDisplay(label: string | null | undefined): string {
-  if (!label) return 'Unknown';
-  return EMOTION_COLOR_MAP[label as EmotionCategory]?.label ?? label;
-}
-
-export function sentimentVariant(
-  label: string | null | undefined,
-  isUncertain?: boolean | null
-): 'emerald' | 'neutral' | 'rose' | 'amber' {
-  if (isUncertain || label === 'uncertain') return 'amber';
-  if (label === 'positive') return 'emerald';
-  if (label === 'negative') return 'rose';
-  return 'neutral';
-}
-
-function reviewStatusVariant(
-  status: string | undefined
-): 'neutral' | 'emerald' | 'blue' | 'amber' {
-  if (status === 'confirmed') return 'emerald';
-  if (status === 'corrected') return 'blue';
-  if (status === 'flagged_uncertain') return 'amber';
-  return 'neutral';
-}
-
 export interface EmotionAnalysisPanelProps {
   affectResult: EmotionAnalyzeResponse | null;
+  initialHistory?: EmotionReviewHistoryItem[];
   loading: boolean;
   error: ParsedApiError | null;
   currentInputText: string;
   onRetry?: () => void;
-  onReviewUpdated: (recordId: string, review: HumanEmotionOverlay) => void;
+  onReviewUpdated: (
+    recordId: string,
+    review: HumanEmotionOverlay,
+    history?: EmotionReviewHistoryItem[]
+  ) => void;
 }
 
 export const EmotionAnalysisPanel: React.FC<EmotionAnalysisPanelProps> = ({
   affectResult,
+  initialHistory,
   loading,
   error,
   currentInputText,
@@ -77,23 +65,30 @@ export const EmotionAnalysisPanel: React.FC<EmotionAnalysisPanelProps> = ({
   onReviewUpdated,
 }) => {
   const [showAllLabels, setShowAllLabels] = useState(false);
-  const [humanEmotionChoice, setHumanEmotionChoice] = useState<EmotionCategory>('neutral');
-  const [humanNote, setHumanNote] = useState('');
   const [reviewSaving, setReviewSaving] = useState(false);
   const [reviewError, setReviewError] = useState<ParsedApiError | null>(null);
   const [reviewFeedback, setReviewFeedback] = useState<string | null>(null);
+  const [history, setHistory] = useState<EmotionReviewHistoryItem[]>(initialHistory ?? []);
 
   useEffect(() => {
     setReviewError(null);
     setReviewFeedback(null);
     setShowAllLabels(false);
-    if (affectResult) {
-      setHumanEmotionChoice(
-        affectResult.review.human_emotion_label ?? affectResult.emotion.predicted_emotion
-      );
-      setHumanNote(affectResult.review.rationale ?? '');
+    if (initialHistory) {
+      setHistory(initialHistory);
+      return;
     }
-  }, [affectResult?.record_id]);
+    setHistory([]);
+    if (affectResult && affectResult.review.history_count > 0) {
+      void fetchEmotionVerification(affectResult.record_id)
+        .then((resp) => {
+          setHistory(resp.history);
+        })
+        .catch(() => {
+          // Non-fatal: panel still works with summary review fields
+        });
+    }
+  }, [affectResult?.record_id, initialHistory]);
 
   const primaryProbItems = useMemo(() => {
     if (!affectResult) return [];
@@ -114,7 +109,12 @@ export const EmotionAnalysisPanel: React.FC<EmotionAnalysisPanelProps> = ({
     return primaryProbItems;
   }, [affectResult, showAllLabels, primaryProbItems]);
 
-  const handleReviewSubmit = async (action: ReviewAction, targetEmotion: EmotionCategory) => {
+  const handleReviewSubmit = async (payload: {
+    action: ReviewAction;
+    distribution?: HumanEmotionDistributionItem[];
+    humanSentiment?: HumanSentimentLabel;
+    rationale?: string;
+  }) => {
     if (!affectResult) return;
     setReviewSaving(true);
     setReviewError(null);
@@ -122,16 +122,31 @@ export const EmotionAnalysisPanel: React.FC<EmotionAnalysisPanelProps> = ({
     try {
       const resp = await submitEmotionVerification({
         record_id: affectResult.record_id,
-        action,
-        human_emotion_label: targetEmotion,
-        rationale: humanNote.trim() || undefined,
+        action: payload.action,
+        human_emotion_label:
+          payload.action === 'flag_uncertain'
+            ? ('uncertain' as EmotionCategory)
+            : undefined,
+        human_emotion_distribution: payload.distribution,
+        human_sentiment_label:
+          payload.action === 'flag_uncertain'
+            ? 'uncertain'
+            : payload.humanSentiment,
+        rationale: payload.rationale,
       });
-      onReviewUpdated(affectResult.record_id, resp.review);
-      setHumanEmotionChoice(resp.review.human_emotion_label ?? targetEmotion);
+      setHistory(resp.history);
+      onReviewUpdated(affectResult.record_id, resp.review, resp.history);
+
+      const summary =
+        resp.review.review_status === 'flagged_uncertain'
+          ? 'Flagged Uncertain (no distribution)'
+          : formatEmotionDistributionSummary(resp.review.human_emotion_distribution) ||
+            formatEmotionDisplay(resp.review.human_emotion_label);
+      const sentInfo = resp.review.human_sentiment_label
+        ? ` & sentiment ${formatSentimentDisplay(resp.review.human_sentiment_label)}`
+        : '';
       setReviewFeedback(
-        `Saved (${resp.review.review_status}): Human emotion recorded as ${formatEmotionDisplay(
-          resp.review.human_emotion_label
-        )} while original model output (${formatEmotionDisplay(
+        `Saved (${resp.review.review_status}, Rev ${resp.review.revision ?? resp.review.history_count}): Human annotation recorded as ${summary}${sentInfo} while original model output (${formatEmotionDisplay(
           resp.original_emotion.predicted_emotion
         )}) remains unchanged.`
       );
@@ -178,10 +193,8 @@ export const EmotionAnalysisPanel: React.FC<EmotionAnalysisPanelProps> = ({
 
   const inputEditedSinceRun =
     currentInputText.trim().length > 0 && currentInputText.trim() !== affectResult.input_text;
-  const activeEmotionColor =
-    EMOTION_COLOR_MAP[
-      affectResult.review.human_emotion_label ?? affectResult.emotion.predicted_emotion
-    ]?.color ?? '#64748B';
+  const modelEmotionColor =
+    EMOTION_COLOR_MAP[affectResult.emotion.predicted_emotion]?.color ?? '#64748B';
 
   return (
     <div className="rounded-xl border border-border bg-background/75 p-4 space-y-3.5">
@@ -250,16 +263,16 @@ export const EmotionAnalysisPanel: React.FC<EmotionAnalysisPanelProps> = ({
         </div>
       </div>
 
-      {/* Detected Emotion + All Supported Probability Bars */}
+      {/* Immutable Original Model Probability Distribution */}
       <div className="rounded-lg border border-border-subtle bg-background-surface p-3 space-y-2.5">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <span className="text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-            Detected Emotion ({affectResult.emotion.model_name.split('/').pop()})
+            Model Prediction — Immutable ({affectResult.emotion.model_name.split('/').pop()})
           </span>
           <span className="inline-flex items-center gap-1.5 rounded-full border border-border bg-background px-2.5 py-0.5 text-[11px] font-medium text-text-primary">
             <span
               className="w-2 h-2 rounded-full"
-              style={{ backgroundColor: activeEmotionColor }}
+              style={{ backgroundColor: modelEmotionColor }}
             />
             {formatEmotionDisplay(affectResult.emotion.predicted_emotion)} ·{' '}
             {(affectResult.emotion.confidence * 100).toFixed(1)}%
@@ -285,14 +298,15 @@ export const EmotionAnalysisPanel: React.FC<EmotionAnalysisPanelProps> = ({
 
         <div className="space-y-1.5 pt-0.5">
           <div className="text-[11px] font-medium text-text-secondary">
-            Emotion Probabilities ({visibleProbItems.length} shown)
+            Model Probabilities — immutable ({visibleProbItems.length} shown)
           </div>
           <div className="max-h-56 overflow-y-auto pr-1 space-y-1.5">
             {visibleProbItems.map((item) => {
               const pct = item.probability * 100;
+              const barColor = EMOTION_COLOR_MAP[item.category]?.color ?? '#64748B';
               return (
                 <div key={item.label} className="space-y-0.5">
-                  <div className="flex justify-between text-[11px]">
+                  <div className="flex justify-between items-center text-[11px]">
                     <span className="capitalize text-text-secondary">
                       {item.label}
                       {item.label === 'joy' && (
@@ -315,7 +329,7 @@ export const EmotionAnalysisPanel: React.FC<EmotionAnalysisPanelProps> = ({
                       style={{
                         width: `${Math.min(100, pct)}%`,
                         minWidth: item.probability > 0 ? '2px' : '0px',
-                        backgroundColor: EMOTION_COLOR_MAP[item.category]?.color ?? '#64748B',
+                        backgroundColor: barColor,
                       }}
                     />
                   </div>
@@ -352,109 +366,25 @@ export const EmotionAnalysisPanel: React.FC<EmotionAnalysisPanelProps> = ({
         </p>
       </div>
 
-      {/* Human Verification Controls */}
-      <div className="rounded-lg border border-border-subtle bg-background-surface p-3 space-y-2.5">
-        <div className="flex items-center justify-between gap-2">
-          <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-text-muted">
-            <UserCheck className="w-3.5 h-3.5 text-brand-teal" />
-            Human Verification
-          </span>
-          <Badge variant={reviewStatusVariant(affectResult.review.review_status)}>
-            {affectResult.review.review_status.replace('_', ' ')}
-          </Badge>
-        </div>
+      {/* Separate Human-Confirmed Emotion Distribution Visualization */}
+      <HumanConfirmedDistributionSection review={affectResult.review} />
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-          <div className="rounded-lg border border-border-subtle bg-background/70 px-2.5 py-1.5">
-            <span className="text-[10px] text-text-muted block">
-              Original Model Prediction (Immutable)
-            </span>
-            <span className="font-semibold text-text-primary">
-              {formatEmotionDisplay(affectResult.emotion.predicted_emotion)}
-            </span>
-          </div>
-          <div className="rounded-lg border border-border-subtle bg-background/70 px-2.5 py-1.5">
-            <span className="text-[10px] text-text-muted block">Human-Confirmed Emotion</span>
-            <span className="font-semibold text-brand-navy">
-              {affectResult.review.human_emotion_label
-                ? formatEmotionDisplay(affectResult.review.human_emotion_label)
-                : 'Pending verification'}
-            </span>
-          </div>
-        </div>
-
-        {affectResult.review.reviewed_at && (
-          <div className="text-[10px] font-mono text-text-muted">
-            Last updated: {formatTimestamp(affectResult.review.reviewed_at)} (
-            {affectResult.review.history_count} log entries)
-          </div>
-        )}
-
-        <div className="flex flex-wrap gap-2">
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            loading={reviewSaving}
-            onClick={() =>
-              void handleReviewSubmit('confirm', affectResult.emotion.predicted_emotion)
-            }
-            leftIcon={<CheckCircle2 className="w-3.5 h-3.5 text-brand-teal" />}
-          >
-            Confirm {formatEmotionDisplay(affectResult.emotion.predicted_emotion)}
-          </Button>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            loading={reviewSaving}
-            onClick={() => void handleReviewSubmit('flag_uncertain', 'uncertain')}
-          >
-            Mark Uncertain
-          </Button>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 items-end">
-          <Select
-            label="Select / Correct Emotion"
-            options={EMOTION_SELECT_OPTIONS}
-            value={humanEmotionChoice}
-            onChange={(val) => setHumanEmotionChoice(val as EmotionCategory)}
-          />
-          <Button
-            type="button"
-            variant="primary"
-            size="md"
-            loading={reviewSaving}
-            onClick={() =>
-              void handleReviewSubmit(
-                humanEmotionChoice === 'uncertain'
-                  ? 'flag_uncertain'
-                  : humanEmotionChoice === affectResult.emotion.predicted_emotion
-                  ? 'confirm'
-                  : 'correct',
-                humanEmotionChoice
-              )
-            }
-          >
-            Submit Correction
-          </Button>
-        </div>
-
-        <Input
-          label="Correction Note (Optional)"
-          value={humanNote}
-          onChange={(e) => setHumanNote(e.target.value)}
-          placeholder="Optional note explaining correction…"
-        />
-
-        {reviewError && <ErrorAlert error={reviewError} />}
-        {reviewFeedback && (
-          <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-900">
-            {reviewFeedback}
-          </div>
-        )}
-      </div>
+      {/* Multi-Emotion Percentage Verification Controls */}
+      <HumanVerificationEditor
+        recordId={affectResult.record_id}
+        originalEmotion={affectResult.emotion.predicted_emotion}
+        originalSentiment={
+          affectResult.sentiment.is_uncertain
+            ? 'uncertain'
+            : affectResult.sentiment.predicted_label
+        }
+        review={affectResult.review}
+        history={history}
+        saving={reviewSaving}
+        error={reviewError}
+        feedback={reviewFeedback}
+        onSubmit={handleReviewSubmit}
+      />
     </div>
   );
 };

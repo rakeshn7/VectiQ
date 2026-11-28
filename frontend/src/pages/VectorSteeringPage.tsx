@@ -38,11 +38,18 @@ import {
 import { useStudio } from '@/hooks/useStudio';
 import {
   analyzeSentenceAffect,
+  fetchEmotionVerification,
   parseApiError,
   steerEmbedding,
   type ParsedApiError,
 } from '@/services';
-import type { ConceptId, HumanEmotionOverlay } from '@/types/api';
+import type { ConceptId, EmotionReviewHistoryItem, HumanEmotionOverlay } from '@/types/api';
+import {
+  formatEmotionDistributionSummary,
+  formatSentimentDisplay,
+  loadStoredSteerSession,
+  saveStoredSteerSession,
+} from '@/utils/emotionDistribution';
 import {
   CONTRACT_CONCEPTS,
   CONTRACT_STEERING_BOUNDS,
@@ -107,9 +114,11 @@ export const VectorSteeringPage: React.FC = () => {
   const [apiError, setApiError] = useState<ParsedApiError | null>(null);
   const [affectLoading, setAffectLoading] = useState<boolean>(false);
   const [affectError, setAffectError] = useState<ParsedApiError | null>(null);
+  const [affectHistory, setAffectHistory] = useState<EmotionReviewHistoryItem[]>([]);
   const [validationError, setValidationError] = useState<string | undefined>();
   const steerSeqRef = useRef<number>(0);
   const affectSeqRef = useRef<number>(0);
+  const restoredSessionRef = useRef<boolean>(false);
 
   useEffect(() => {
     if (routeState?.prefillText) {
@@ -145,6 +154,77 @@ export const VectorSteeringPage: React.FC = () => {
     void loadSemanticMap();
   }, [loadSemanticMap]);
 
+  // Restore saved active sentence & human verification from backend SQLite on browser page reload
+  useEffect(() => {
+    if (restoredSessionRef.current || routeState?.autoRunGuided || lastSteerAffectResult) {
+      return;
+    }
+    const saved = loadStoredSteerSession();
+    if (!saved) return;
+    restoredSessionRef.current = true;
+
+    setText(saved.text);
+    setConcept(saved.concept);
+    setStrength(saved.strength);
+    setTopK(saved.topK);
+    setIncludeEmbeddings(saved.includeEmbeddings);
+
+    const steerSeq = ++steerSeqRef.current;
+    const affectSeq = ++affectSeqRef.current;
+    setLoading(true);
+    setAffectLoading(true);
+
+    const steerPayload = {
+      text: saved.text,
+      concept: saved.concept,
+      strength: saved.strength,
+      top_k_neighbors: saved.topK,
+      include_embeddings: saved.includeEmbeddings,
+    };
+
+    void Promise.allSettled([
+      fetchEmotionVerification(saved.recordId),
+      steerEmbedding(steerPayload),
+    ]).then(([reviewRes, steerRes]) => {
+      if (reviewRes.status === 'fulfilled' && affectSeq === affectSeqRef.current) {
+        const rv = reviewRes.value;
+        setAffectHistory(rv.history);
+        setLastSteerAffectResult({
+          record_id: rv.record_id,
+          input_text: rv.input_text,
+          sentiment: rv.original_sentiment,
+          emotion: rv.original_emotion,
+          embedding_info: {
+            model_name: config?.model.name ?? 'all-MiniLM-L6-v2',
+            dimensions: config?.model.dimensions ?? 384,
+            normalized: true,
+            umap_coordinates: rv.umap_coordinates,
+            concept: saved.concept,
+            concept_score:
+              steerRes.status === 'fulfilled' ? steerRes.value.original.concept_score : 0,
+            embedding: null,
+          },
+          nearest_neighbors:
+            steerRes.status === 'fulfilled'
+              ? steerRes.value.original.nearest_neighbors.map((nn) => ({ ...nn }))
+              : [],
+          review: rv.review,
+          created_at: rv.review.reviewed_at ?? new Date().toISOString(),
+        });
+        setAffectError(null);
+      } else if (reviewRes.status === 'rejected') {
+        saveStoredSteerSession(null);
+      }
+      if (affectSeq === affectSeqRef.current) setAffectLoading(false);
+
+      if (steerRes.status === 'fulfilled' && steerSeq === steerSeqRef.current) {
+        setActiveSteerRun(steerPayload, steerRes.value);
+      }
+      if (steerSeq === steerSeqRef.current) setLoading(false);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const estimatedWordCount = useMemo(() => {
     const trimmed = text.trim();
     return trimmed ? trimmed.split(/\s+/).length : 0;
@@ -168,18 +248,30 @@ export const VectorSteeringPage: React.FC = () => {
   const runAffectAnalysis = async (
     trimmedText: string,
     affectSeq: number,
-    conceptOverride?: ConceptId
+    conceptOverride?: ConceptId,
+    strengthOverride?: number
   ) => {
+    const targetConcept = conceptOverride ?? concept;
+    const targetStrength = strengthOverride ?? strength;
     try {
       const response = await analyzeSentenceAffect({
         text: trimmedText,
-        concept: conceptOverride ?? concept,
+        concept: targetConcept,
         top_k_neighbors: topK,
         include_embeddings: false,
       });
       if (affectSeq !== affectSeqRef.current) return;
       setLastSteerAffectResult(response);
+      setAffectHistory([]);
       setAffectError(null);
+      saveStoredSteerSession({
+        recordId: response.record_id,
+        text: trimmedText,
+        concept: targetConcept,
+        strength: targetStrength,
+        topK,
+        includeEmbeddings,
+      });
     } catch (err) {
       if (affectSeq !== affectSeqRef.current) return;
       setAffectError(parseApiError(err));
@@ -238,7 +330,7 @@ export const VectorSteeringPage: React.FC = () => {
       }
     })();
 
-    const affectTask = runAffectAnalysis(trimmed, affectSeq, targetConcept);
+    const affectTask = runAffectAnalysis(trimmed, affectSeq, targetConcept, targetStrength);
     await Promise.allSettled([steerTask, affectTask]);
   };
 
@@ -254,10 +346,17 @@ export const VectorSteeringPage: React.FC = () => {
     void runAffectAnalysis(trimmed, affectSeq);
   };
 
-  const handleAffectReviewUpdated = (recordId: string, review: HumanEmotionOverlay) => {
+  const handleAffectReviewUpdated = (
+    recordId: string,
+    review: HumanEmotionOverlay,
+    history?: EmotionReviewHistoryItem[]
+  ) => {
     setLastSteerAffectResult((prev) =>
       prev && prev.record_id === recordId ? { ...prev, review } : prev
     );
+    if (history) {
+      setAffectHistory(history);
+    }
     void loadSemanticMap(undefined, true);
   };
 
@@ -277,8 +376,10 @@ export const VectorSteeringPage: React.FC = () => {
     setValidationError(undefined);
     setApiError(null);
     setAffectError(null);
+    setAffectHistory([]);
     setAffectLoading(false);
     setLoading(false);
+    saveStoredSteerSession(null);
     clearActiveSteerRun();
   };
 
@@ -373,6 +474,7 @@ export const VectorSteeringPage: React.FC = () => {
                 {/* Compact Sentiment & Emotion Analysis + Human Verification directly beneath Input Sentence */}
                 <EmotionAnalysisPanel
                   affectResult={lastSteerAffectResult}
+                  initialHistory={affectHistory}
                   loading={affectLoading}
                   error={affectError}
                   currentInputText={text}
@@ -560,6 +662,36 @@ export const VectorSteeringPage: React.FC = () => {
                         text: lastSteerResult.input_text,
                         coordinates: lastSteerResult.original.coordinates,
                         conceptScore: lastSteerResult.original.concept_score,
+                        emotion:
+                          lastSteerAffectResult &&
+                          lastSteerAffectResult.input_text === lastSteerResult.input_text
+                            ? lastSteerAffectResult.emotion.predicted_emotion
+                            : null,
+                        humanEmotion:
+                          lastSteerAffectResult &&
+                          lastSteerAffectResult.input_text === lastSteerResult.input_text
+                            ? lastSteerAffectResult.review.human_emotion_label ?? null
+                            : null,
+                        humanDistribution:
+                          lastSteerAffectResult &&
+                          lastSteerAffectResult.input_text === lastSteerResult.input_text
+                            ? lastSteerAffectResult.review.human_emotion_distribution
+                            : undefined,
+                        humanSentiment:
+                          lastSteerAffectResult &&
+                          lastSteerAffectResult.input_text === lastSteerResult.input_text
+                            ? lastSteerAffectResult.review.human_sentiment_label ?? null
+                            : null,
+                        reviewStatus:
+                          lastSteerAffectResult &&
+                          lastSteerAffectResult.input_text === lastSteerResult.input_text
+                            ? lastSteerAffectResult.review.review_status
+                            : null,
+                        sentiment:
+                          lastSteerAffectResult &&
+                          lastSteerAffectResult.input_text === lastSteerResult.input_text
+                            ? lastSteerAffectResult.sentiment.predicted_label
+                            : null,
                       }}
                       steeredPoint={{
                         label: `Steered (λ=${formatSigned(lastSteerResult.strength, 2)})`,
@@ -705,17 +837,35 @@ export const VectorSteeringPage: React.FC = () => {
                             lastSteerAffectResult.sentiment.is_uncertain
                           )}
                         >
+                          Model:{' '}
                           {lastSteerAffectResult.sentiment.is_uncertain
                             ? `Uncertain (${lastSteerAffectResult.sentiment.predicted_label})`
                             : lastSteerAffectResult.sentiment.predicted_label}{' '}
                           ({(lastSteerAffectResult.sentiment.confidence * 100).toFixed(1)}%)
                         </Badge>
+                        {lastSteerAffectResult.review.human_sentiment_label && (
+                          <Badge
+                            variant={sentimentVariant(
+                              lastSteerAffectResult.review.human_sentiment_label
+                            )}
+                          >
+                            Human:{' '}
+                            {formatSentimentDisplay(
+                              lastSteerAffectResult.review.human_sentiment_label
+                            )}
+                          </Badge>
+                        )}
                         <Badge variant="violet">
-                          {formatEmotionDisplay(
-                            lastSteerAffectResult.review.human_emotion_label ??
-                              lastSteerAffectResult.emotion.predicted_emotion
-                          )}
-                          {lastSteerAffectResult.review.human_emotion_label ? ' (verified)' : ''}
+                          {lastSteerAffectResult.review.review_status === 'flagged_uncertain'
+                            ? 'Uncertain (human flagged)'
+                            : lastSteerAffectResult.review.human_emotion_distribution?.length
+                            ? `${formatEmotionDistributionSummary(
+                                lastSteerAffectResult.review.human_emotion_distribution
+                              )} (human verified)`
+                            : formatEmotionDisplay(
+                                lastSteerAffectResult.review.human_emotion_label ??
+                                  lastSteerAffectResult.emotion.predicted_emotion
+                              )}
                         </Badge>
                       </div>
                     </div>

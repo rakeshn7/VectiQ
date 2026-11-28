@@ -121,7 +121,7 @@ export function runGuideAndGlossaryTests(): void {
 
   // 4. Complete Parameter Glossary coverage, categories, search, and Simple vs Research modes
   assert.equal(GLOSSARY_CATEGORIES.length, 6);
-  assert.ok(GLOSSARY_ENTRIES.length >= 52);
+  assert.ok(GLOSSARY_ENTRIES.length >= 53);
 
   for (const entry of GLOSSARY_ENTRIES) {
     assert.ok(entry.parameterName.length > 0);
@@ -147,7 +147,11 @@ export function runGuideAndGlossaryTests(): void {
   );
   assert.ok(glossarySimpleHtml.includes('Not currently implemented'));
   assert.ok(glossarySimpleHtml.includes('Simple Mode'));
-  assert.ok(glossarySimpleHtml.includes('Showing 52 of 52 documented parameters'));
+  assert.ok(
+    glossarySimpleHtml.includes(
+      `Showing ${GLOSSARY_ENTRIES.length} of ${GLOSSARY_ENTRIES.length} documented parameters`
+    )
+  );
 
   const glossaryResearchHtml = renderToStaticMarkup(
     <MemoryRouter>

@@ -71,11 +71,24 @@ export interface ConfigResponse {
 /**
  * GET /api/v1/semantic-map
  */
+export type GraphEmotionLabelMode = 'human' | 'model';
+
+export interface HumanEmotionDistributionItem {
+  emotion: EmotionCategory;
+  percentage: number;
+}
+
+export interface SemanticMapHumanEmotionItem {
+  emotion: string;
+  percentage: number;
+}
+
 export interface SemanticMapQueryParams {
   include_embeddings?: boolean;
   category?: string;
   sentiment?: string;
   emotion?: string;
+  label_mode?: GraphEmotionLabelMode;
   search?: string;
   limit?: number;
 }
@@ -95,6 +108,9 @@ export interface SemanticMapPoint {
   emotion_confidence?: number | null;
   emotion_is_uncertain?: boolean | null;
   human_emotion_label?: EmotionCategory | null;
+  human_emotion_distribution?: SemanticMapHumanEmotionItem[];
+  human_sentiment_label?: HumanSentimentLabel | null;
+  confirmed_for_evaluation?: boolean;
   emotion_review_status?: ReviewStatus | null;
 }
 
@@ -356,6 +372,7 @@ export interface ApiStatus {
 }
 
 export type SentimentLabel = 'positive' | 'neutral' | 'negative';
+export type HumanSentimentLabel = 'positive' | 'neutral' | 'negative' | 'mixed' | 'uncertain';
 export type EmotionCategory =
   | 'joy'
   | 'sadness'
@@ -410,13 +427,19 @@ export interface EnrichedNeighborItem extends NearestNeighborItem {
   emotion_raw_label?: string | null;
   emotion_confidence?: number | null;
   human_emotion_label?: EmotionCategory | null;
+  human_emotion_distribution?: HumanEmotionDistributionItem[];
+  human_sentiment_label?: HumanSentimentLabel | null;
 }
 
 export interface HumanEmotionOverlay {
   review_status: ReviewStatus;
   human_emotion_label?: EmotionCategory | null;
+  human_emotion_distribution: HumanEmotionDistributionItem[];
+  human_sentiment_label?: HumanSentimentLabel | null;
+  confirmed_for_evaluation?: boolean;
   rationale?: string | null;
   reviewed_at?: string | null;
+  revision?: number;
   history_count: number;
 }
 
@@ -449,17 +472,24 @@ export interface EmotionAnalyzeResponse {
 export interface EmotionReviewRequest {
   record_id: string;
   action: ReviewAction;
-  human_emotion_label: EmotionCategory;
+  human_emotion_label?: EmotionCategory | null;
+  human_emotion_distribution?: HumanEmotionDistributionItem[];
+  human_sentiment_label?: HumanSentimentLabel | null;
   rationale?: string | null;
 }
 
 export interface EmotionReviewHistoryItem {
   history_id: string;
   record_id: string;
+  revision: number;
   previous_status: ReviewStatus;
   new_status: ReviewStatus;
   previous_human_emotion?: EmotionCategory | null;
   new_human_emotion: EmotionCategory;
+  previous_human_distribution?: HumanEmotionDistributionItem[];
+  new_human_distribution?: HumanEmotionDistributionItem[];
+  previous_human_sentiment?: HumanSentimentLabel | null;
+  new_human_sentiment?: HumanSentimentLabel | null;
   action: ReviewAction;
   rationale?: string | null;
   reviewed_at: string;
@@ -473,4 +503,39 @@ export interface EmotionReviewResponse {
   umap_coordinates: Coordinate3D;
   review: HumanEmotionOverlay;
   history: EmotionReviewHistoryItem[];
+}
+
+export interface HumanEmotionEvaluationRecord {
+  record_id: string;
+  input_text: string;
+  review_status: ReviewStatus;
+  model_predicted_emotion: EmotionCategory;
+  model_confidence: number;
+  model_predicted_sentiment?: SentimentLabel | null;
+  dominant_human_emotion: EmotionCategory;
+  human_emotion_distribution: HumanEmotionDistributionItem[];
+  human_sentiment_label?: HumanSentimentLabel | null;
+  is_mixed_human_distribution: boolean;
+  dominant_agreement: boolean;
+  model_top1_in_human_multilabel: boolean;
+  soft_overlap_score: number;
+  reviewed_at?: string | null;
+  revision: number;
+}
+
+export interface HumanEmotionEvaluationSummary {
+  total_records: number;
+  confirmed_ground_truth_count: number;
+  confirmed_count: number;
+  corrected_count: number;
+  excluded_uncertain_count: number;
+  excluded_unreviewed_count: number;
+  mixed_distribution_count: number;
+  single_emotion_count: number;
+  dominant_top1_agreement?: number | null;
+  multilabel_target_coverage?: number | null;
+  mean_soft_distribution_overlap?: number | null;
+  methodology: string;
+  limitations: string;
+  records: HumanEmotionEvaluationRecord[];
 }

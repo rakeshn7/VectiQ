@@ -598,6 +598,15 @@ Performs multi-step steering across an array of steering strengths. Evaluates tr
 
 ---
 
+### 3.6 Sentiment, Multi-Emotion & Percentage-Based Human Verification (`/api/v1/emotions/*`)
+
+- `POST /api/v1/emotions/analyze`: Runs frozen `twitter-roberta-base-sentiment-latest` and `roberta-base-go_emotions` on raw text, computes frozen 3D UMAP coordinates + 384D nearest neighbors, and creates an immutable baseline record.
+- `POST /api/v1/emotions/reviews`: Stores human verification **without mutating** original classifier predictions/probabilities or UMAP coordinates. Accepts structured `human_emotion_distribution` (`[{ emotion, percentage }]`) where every entry is in `[0, 100]`, duplicates are rejected, and confirmed distributions sum strictly to `100% ± 1e-3` (no silent normalization). Supports single-emotion `100%` backward compatibility and `action="flag_uncertain"` without percentages. Updates timestamped revision history.
+- `GET /api/v1/emotions/reviews/{record_id}`: Fetches immutable original prediction, current human-confirmed percentage distribution (`human_emotion_distribution`), dominant label, revision number, and audit history.
+- `GET /api/v1/emotions/evaluation-summary`: Computes multi-label human-confirmed evaluation metrics (`dominant_top1_agreement`, `multilabel_target_coverage`, `mean_soft_distribution_overlap`) **strictly over `confirmed` and `corrected` records**. Explicitly excludes `flagged_uncertain` and `unreviewed` records from confirmed ground truth and never equates human target percentages with model confidence.
+
+---
+
 ## 4. HTTP Status Codes & Error Mapping
 
 | Status Code | Reason | Cause |

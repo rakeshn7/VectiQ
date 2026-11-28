@@ -8,6 +8,7 @@ import type {
   EvaluateRequest,
   EvaluateResponse,
   HealthResponse,
+  HumanEmotionEvaluationSummary,
   SemanticMapQueryParams,
   SemanticMapResponse,
   SteerRequest,
@@ -81,6 +82,13 @@ export async function fetchEmotionVerification(
 ): Promise<EmotionReviewResponse> {
   const { data } = await apiClient.get<EmotionReviewResponse>(
     `${API_V1_PREFIX}/emotions/reviews/${encodeURIComponent(recordId)}`
+  );
+  return data;
+}
+
+export async function fetchEmotionEvaluationSummary(): Promise<HumanEmotionEvaluationSummary> {
+  const { data } = await apiClient.get<HumanEmotionEvaluationSummary>(
+    `${API_V1_PREFIX}/emotions/evaluation-summary`
   );
   return data;
 }

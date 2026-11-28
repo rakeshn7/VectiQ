@@ -112,7 +112,7 @@ export const StudioProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [semanticMapError, setSemanticMapError] = useState<ParsedApiError | null>(null);
 
   const semanticMapRef = useRef<SemanticMapResponse | null>(null);
-  const semanticMapInFlightRef = useRef<boolean>(false);
+  const semanticMapSeqRef = useRef<number>(0);
 
   const [lastSteerRequest, setLastSteerRequest] = useState<SteerRequest | null>(null);
   const [lastSteerResult, setLastSteerResult] = useState<SteerResponse | null>(null);
@@ -188,10 +188,10 @@ export const StudioProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   }, [refreshBackendStatus]);
 
   const loadSemanticMap = useCallback(async (params?: SemanticMapQueryParams, force = false) => {
-    if (semanticMapInFlightRef.current) return;
-    if (semanticMapRef.current && !force && !params) return;
+    if (!force && !params && semanticMapRef.current) return;
+    if (!force && !params && semanticMapSeqRef.current > 0) return;
 
-    semanticMapInFlightRef.current = true;
+    const seq = ++semanticMapSeqRef.current;
     setSemanticMapLoading(true);
     setSemanticMapError(null);
 
@@ -201,13 +201,16 @@ export const StudioProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         ...params,
       };
       const data = await fetchSemanticMap(effectiveParams);
+      if (seq !== semanticMapSeqRef.current) return;
       semanticMapRef.current = data;
       setSemanticMap(data);
     } catch (err) {
+      if (seq !== semanticMapSeqRef.current) return;
       setSemanticMapError(parseApiError(err));
     } finally {
-      semanticMapInFlightRef.current = false;
-      setSemanticMapLoading(false);
+      if (seq === semanticMapSeqRef.current) {
+        setSemanticMapLoading(false);
+      }
     }
   }, []);
 
