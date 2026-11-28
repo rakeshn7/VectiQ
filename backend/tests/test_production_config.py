@@ -121,3 +121,82 @@ def test_volume_artifact_persistence_across_restarts_and_db_override(
     repaired_container.initialize(save_artifacts=True)
     assert repaired_container.is_ready is True
     assert not (artifacts_dir / "manifest.json.tmp").exists()
+
+
+def test_low_memory_mode_unloads_affect_backends_sequentially(
+    tmp_path: Path,
+) -> None:
+    """In low_memory_mode, sentiment and emotion backends never stay concurrently resident."""
+    from app.services.affect_analysis_service import AffectAnalysisService
+
+    backend_dir = Path(__file__).resolve().parent.parent
+    low_mem_settings = Settings(
+        data_dir=backend_dir / "data",
+        artifacts_dir=tmp_path / "artifacts",
+        environment="production",
+        low_memory_mode=True,
+    )
+    container = ServiceContainer(low_mem_settings)
+    container.embedding_service._model = DeterministicFakeEmbeddingModel()
+
+    concurrent_peak = 0
+
+    class TrackingSentimentBackend(FakeSentimentBackend):
+        def __init__(self, peer_getter) -> None:
+            self.is_loaded = False
+            self.is_verified = False
+            self._peer_getter = peer_getter
+
+        def load(self) -> None:
+            nonlocal concurrent_peak
+            self.is_loaded = True
+            self.is_verified = True
+            active = int(self.is_loaded) + int(self._peer_getter().is_loaded)
+            concurrent_peak = max(concurrent_peak, active)
+
+        def unload(self) -> None:
+            self.is_loaded = False
+
+    class TrackingEmotionBackend(FakeEmotionBackend):
+        def __init__(self, peer_getter) -> None:
+            self.is_loaded = False
+            self.is_verified = False
+            self._peer_getter = peer_getter
+
+        def load(self) -> None:
+            nonlocal concurrent_peak
+            self.is_loaded = True
+            self.is_verified = True
+            active = int(self.is_loaded) + int(self._peer_getter().is_loaded)
+            concurrent_peak = max(concurrent_peak, active)
+
+        def unload(self) -> None:
+            self.is_loaded = False
+
+    emo_ref: list[TrackingEmotionBackend] = []
+    sent_backend = TrackingSentimentBackend(lambda: emo_ref[0])
+    emo_backend = TrackingEmotionBackend(lambda: sent_backend)
+    emo_ref.append(emo_backend)
+
+    container.affect_analysis_service = AffectAnalysisService(
+        artifacts_dir=low_mem_settings.artifacts_dir,
+        sentiment_model_name=low_mem_settings.sentiment_model_name,
+        emotion_model_name=low_mem_settings.emotion_model_name,
+        low_memory_mode=True,
+        sentiment_backend=sent_backend,
+        emotion_backend=emo_backend,
+    )
+
+    container.initialize(save_artifacts=True)
+    assert concurrent_peak == 1
+    assert sent_backend.is_loaded is False
+    assert emo_backend.is_loaded is False
+    assert container.affect_is_ready is True
+
+    s_pred, e_pred = container.affect_analysis_service.analyze_text("I am very happy today")
+    assert s_pred.predicted_label.value == "positive"
+    assert e_pred.predicted_emotion.value == "joy"
+    assert concurrent_peak == 1
+    assert sent_backend.is_loaded is False
+    assert emo_backend.is_loaded is False
+

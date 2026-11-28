@@ -53,6 +53,7 @@ class ServiceContainer:
             sentiment_prob_threshold=settings.sentiment_uncertainty_prob_threshold,
             sentiment_margin_threshold=settings.sentiment_uncertainty_margin_threshold,
             emotion_prob_threshold=settings.emotion_uncertainty_prob_threshold,
+            low_memory_mode=settings.low_memory_mode,
         )
         self.emotion_review_store = EmotionReviewStore(
             db_path=settings.emotion_reviews_db_path

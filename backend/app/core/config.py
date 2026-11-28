@@ -128,6 +128,10 @@ class Settings(BaseModel):
     emotion_reviews_db_path_override: Optional[str] = Field(
         default_factory=lambda: os.getenv("EMOTION_REVIEWS_DB_PATH") or None
     )
+    low_memory_mode: bool = Field(
+        default_factory=lambda: os.getenv("LOW_MEMORY_MODE", "false").strip().lower()
+        in {"1", "true", "yes"}
+    )
     log_level: str = Field(
         default_factory=lambda: os.getenv("LOG_LEVEL", "INFO")
     )

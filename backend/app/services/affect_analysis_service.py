@@ -1,5 +1,7 @@
 """Genuine transformer Sentiment (RoBERTa) & Multi-Emotion (GoEmotions) inference service."""
 
+import ctypes
+import gc
 import json
 import math
 from pathlib import Path
@@ -59,51 +61,91 @@ class EmotionBackendProtocol(Protocol):
         """Return label->probability map for each text."""
 
 
+def _release_process_memory() -> None:
+    """Trigger GC and return freed heap arenas to OS on glibc Linux hosts."""
+    gc.collect()
+    try:
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
+
+
+def _load_sequence_classifier(
+    model_name: str, *, low_memory_mode: bool
+) -> tuple[Any, Any]:
+    """Load tokenizer and sequence classifier, preferring local cache and optional bfloat16."""
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+    model_kwargs: dict[str, Any] = {}
+    if low_memory_mode:
+        import torch
+
+        torch.set_num_threads(1)
+        model_kwargs["low_cpu_mem_usage"] = True
+        model_kwargs["dtype"] = torch.bfloat16
+
+    try:
+        tok = AutoTokenizer.from_pretrained(model_name, local_files_only=True)
+        mdl = AutoModelForSequenceClassification.from_pretrained(
+            model_name, local_files_only=True, **model_kwargs
+        )
+        logger.info("Loaded model %s from local cache (low_mem=%s).", model_name, low_memory_mode)
+    except Exception:
+        logger.info(
+            "Local cache miss for model %s; downloading from HuggingFace Hub...",
+            model_name,
+        )
+        tok = AutoTokenizer.from_pretrained(model_name)
+        mdl = AutoModelForSequenceClassification.from_pretrained(model_name, **model_kwargs)
+    mdl.eval()
+    return tok, mdl
+
+
 class HuggingFaceSentimentBackend:
     """Thread-safe inference wrapper for cardiffnlp/twitter-roberta-base-sentiment-latest."""
 
-    def __init__(self, model_name: str) -> None:
+    def __init__(self, model_name: str, *, low_memory_mode: bool = False) -> None:
         self.model_name = model_name
+        self.low_memory_mode = low_memory_mode
         self._tokenizer: Any = None
         self._model: Any = None
         self._label_idx: dict[str, int] = {}
+        self._verified: bool = False
         self._lock = threading.Lock()
 
     @property
     def is_loaded(self) -> bool:
         return self._tokenizer is not None and self._model is not None
 
-    def load(self) -> None:
-        if self.is_loaded:
-            return
-        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+    @property
+    def is_verified(self) -> bool:
+        return self._verified or self.is_loaded
 
-        logger.info("Loading sentiment model %s", self.model_name)
-        try:
-            tok = AutoTokenizer.from_pretrained(self.model_name, local_files_only=True)
-            mdl = AutoModelForSequenceClassification.from_pretrained(
-                self.model_name, local_files_only=True
+    def load(self) -> None:
+        with self._lock:
+            if self.is_loaded:
+                return
+            tok, mdl = _load_sequence_classifier(
+                self.model_name, low_memory_mode=self.low_memory_mode
             )
-            logger.info("Loaded sentiment model %s from local cache.", self.model_name)
-        except Exception:
-            logger.info(
-                "Local cache miss for sentiment model %s; downloading from HuggingFace Hub...",
-                self.model_name,
-            )
-            tok = AutoTokenizer.from_pretrained(self.model_name)
-            mdl = AutoModelForSequenceClassification.from_pretrained(self.model_name)
-        mdl.eval()
-        id2label = getattr(mdl.config, "id2label", None) or {
-            0: "negative",
-            1: "neutral",
-            2: "positive",
-        }
-        idx_map = {str(v).strip().lower(): int(k) for k, v in id2label.items()}
-        if not {"negative", "neutral", "positive"}.issubset(idx_map):
-            raise RuntimeError(f"Unexpected sentiment labels on {self.model_name}: {id2label}")
-        self._tokenizer = tok
-        self._model = mdl
-        self._label_idx = idx_map
+            id2label = getattr(mdl.config, "id2label", None) or {
+                0: "negative",
+                1: "neutral",
+                2: "positive",
+            }
+            idx_map = {str(v).strip().lower(): int(k) for k, v in id2label.items()}
+            if not {"negative", "neutral", "positive"}.issubset(idx_map):
+                raise RuntimeError(f"Unexpected sentiment labels on {self.model_name}: {id2label}")
+            self._tokenizer = tok
+            self._model = mdl
+            self._label_idx = idx_map
+            self._verified = True
+
+    def unload(self) -> None:
+        with self._lock:
+            self._tokenizer = None
+            self._model = None
+        _release_process_memory()
 
     def predict_batch(self, texts: list[str], batch_size: int = 32) -> list[SentimentProbabilities]:
         if not self.is_loaded:
@@ -127,7 +169,8 @@ class HuggingFaceSentimentBackend:
                         truncation=True,
                         max_length=512,
                     )
-                    probs = torch.softmax(self._model(**enc).logits, dim=-1).cpu()
+                    logits = self._model(**enc).logits.float()
+                    probs = torch.softmax(logits, dim=-1).cpu()
                     for row in probs:
                         out.append(
                             _normalize_sentiment(
@@ -142,43 +185,43 @@ class HuggingFaceSentimentBackend:
 class HuggingFaceEmotionBackend:
     """Thread-safe inference wrapper for SamLowe/roberta-base-go_emotions."""
 
-    def __init__(self, model_name: str) -> None:
+    def __init__(self, model_name: str, *, low_memory_mode: bool = False) -> None:
         self.model_name = model_name
+        self.low_memory_mode = low_memory_mode
         self._tokenizer: Any = None
         self._model: Any = None
         self._id2label: dict[int, str] = {}
+        self._verified: bool = False
         self._lock = threading.Lock()
 
     @property
     def is_loaded(self) -> bool:
         return self._tokenizer is not None and self._model is not None
 
-    def load(self) -> None:
-        if self.is_loaded:
-            return
-        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+    @property
+    def is_verified(self) -> bool:
+        return self._verified or self.is_loaded
 
-        logger.info("Loading multi-emotion model %s", self.model_name)
-        try:
-            tok = AutoTokenizer.from_pretrained(self.model_name, local_files_only=True)
-            mdl = AutoModelForSequenceClassification.from_pretrained(
-                self.model_name, local_files_only=True
+    def load(self) -> None:
+        with self._lock:
+            if self.is_loaded:
+                return
+            tok, mdl = _load_sequence_classifier(
+                self.model_name, low_memory_mode=self.low_memory_mode
             )
-            logger.info("Loaded emotion model %s from local cache.", self.model_name)
-        except Exception:
-            logger.info(
-                "Local cache miss for emotion model %s; downloading from HuggingFace Hub...",
-                self.model_name,
-            )
-            tok = AutoTokenizer.from_pretrained(self.model_name)
-            mdl = AutoModelForSequenceClassification.from_pretrained(self.model_name)
-        mdl.eval()
-        raw_id2label = getattr(mdl.config, "id2label", None) or {}
-        if not raw_id2label:
-            raise RuntimeError(f"Missing id2label mapping on {self.model_name}.")
-        self._tokenizer = tok
-        self._model = mdl
-        self._id2label = {int(k): str(v).strip().lower() for k, v in raw_id2label.items()}
+            raw_id2label = getattr(mdl.config, "id2label", None) or {}
+            if not raw_id2label:
+                raise RuntimeError(f"Missing id2label mapping on {self.model_name}.")
+            self._tokenizer = tok
+            self._model = mdl
+            self._id2label = {int(k): str(v).strip().lower() for k, v in raw_id2label.items()}
+            self._verified = True
+
+    def unload(self) -> None:
+        with self._lock:
+            self._tokenizer = None
+            self._model = None
+        _release_process_memory()
 
     def predict_batch(self, texts: list[str], batch_size: int = 32) -> list[dict[str, float]]:
         if not self.is_loaded:
@@ -199,7 +242,8 @@ class HuggingFaceEmotionBackend:
                         truncation=True,
                         max_length=512,
                     )
-                    probs = torch.sigmoid(self._model(**enc).logits).cpu()
+                    logits = self._model(**enc).logits.float()
+                    probs = torch.sigmoid(logits).cpu()
                     for row in probs:
                         out.append(
                             {
@@ -240,6 +284,7 @@ class AffectAnalysisService:
         sentiment_prob_threshold: float = 0.60,
         sentiment_margin_threshold: float = 0.15,
         emotion_prob_threshold: float = 0.45,
+        low_memory_mode: bool = False,
         sentiment_backend: Optional[SentimentBackendProtocol] = None,
         emotion_backend: Optional[EmotionBackendProtocol] = None,
     ) -> None:
@@ -249,29 +294,42 @@ class AffectAnalysisService:
         self.sentiment_prob_threshold = sentiment_prob_threshold
         self.sentiment_margin_threshold = sentiment_margin_threshold
         self.emotion_prob_threshold = emotion_prob_threshold
+        self.low_memory_mode = low_memory_mode
+        self._inference_lock = threading.Lock()
 
         self.sentiment_backend: Any = sentiment_backend or HuggingFaceSentimentBackend(
-            sentiment_model_name
+            sentiment_model_name, low_memory_mode=low_memory_mode
         )
         self.emotion_backend: Any = emotion_backend or HuggingFaceEmotionBackend(
-            emotion_model_name
+            emotion_model_name, low_memory_mode=low_memory_mode
         )
         self.corpus_affect: dict[str, CorpusAffectSummary] = {}
         self.is_initialized: bool = False
 
     @property
     def models_loaded(self) -> bool:
+        if self.low_memory_mode:
+            s_ready = bool(
+                getattr(
+                    self.sentiment_backend,
+                    "is_verified",
+                    getattr(self.sentiment_backend, "is_loaded", True),
+                )
+            )
+            e_ready = bool(
+                getattr(
+                    self.emotion_backend,
+                    "is_verified",
+                    getattr(self.emotion_backend, "is_loaded", True),
+                )
+            )
+            return s_ready and e_ready
         s_ready = bool(getattr(self.sentiment_backend, "is_loaded", True))
         e_ready = bool(getattr(self.emotion_backend, "is_loaded", True))
         return s_ready and e_ready
 
     def initialize(self, dataset_service: DatasetService, *, save_artifacts: bool = True) -> None:
         """Load models and populate cached corpus sentiment & emotion metadata."""
-        if hasattr(self.sentiment_backend, "load"):
-            self.sentiment_backend.load()
-        if hasattr(self.emotion_backend, "load"):
-            self.emotion_backend.load()
-
         cache_file = self.artifacts_dir / "corpus_affect_cache_v1.json"
         expected_sig = {
             "dataset_hash": dataset_service.dataset_hash,
@@ -282,6 +340,7 @@ class AffectAnalysisService:
             "e_prob": self.emotion_prob_threshold,
         }
 
+        loaded_cached_records: Optional[dict[str, CorpusAffectSummary]] = None
         if save_artifacts and cache_file.exists():
             try:
                 blob = json.loads(cache_file.read_text(encoding="utf-8"))
@@ -291,15 +350,47 @@ class AffectAnalysisService:
                         for k, v in blob.get("records", {}).items()
                     }
                     if len(parsed) == len(dataset_service.records):
-                        self.corpus_affect = parsed
-                        self.is_initialized = True
-                        logger.info("Loaded cached corpus sentiment & emotion labels (%d).", len(parsed))
-                        return
+                        loaded_cached_records = parsed
             except Exception as exc:
                 logger.warning("Recomputing corpus affect cache: %s", exc)
 
-        texts = [r.text for r in dataset_service.records]
-        s_preds, e_preds = self.analyze_batch(texts)
+        if self.low_memory_mode:
+            if loaded_cached_records is not None:
+                if hasattr(self.sentiment_backend, "load"):
+                    self.sentiment_backend.load()
+                if hasattr(self.sentiment_backend, "unload"):
+                    self.sentiment_backend.unload()
+                if hasattr(self.emotion_backend, "load"):
+                    self.emotion_backend.load()
+                if hasattr(self.emotion_backend, "unload"):
+                    self.emotion_backend.unload()
+                self.corpus_affect = loaded_cached_records
+                self.is_initialized = True
+                logger.info(
+                    "Loaded cached corpus sentiment & emotion labels (%d, low_memory_mode=True).",
+                    len(loaded_cached_records),
+                )
+                return
+
+            texts = [r.text for r in dataset_service.records]
+            s_preds, e_preds = self.analyze_batch(texts)
+        else:
+            if hasattr(self.sentiment_backend, "load"):
+                self.sentiment_backend.load()
+            if hasattr(self.emotion_backend, "load"):
+                self.emotion_backend.load()
+
+            if loaded_cached_records is not None:
+                self.corpus_affect = loaded_cached_records
+                self.is_initialized = True
+                logger.info(
+                    "Loaded cached corpus sentiment & emotion labels (%d).",
+                    len(loaded_cached_records),
+                )
+                return
+
+            texts = [r.text for r in dataset_service.records]
+            s_preds, e_preds = self.analyze_batch(texts)
         self.corpus_affect = {
             rec.id: CorpusAffectSummary(
                 sentiment_label=s_preds[idx].predicted_label,
@@ -413,8 +504,22 @@ class AffectAnalysisService:
         """Run genuine batched sentiment and emotion inference."""
         if not texts:
             return [], []
-        raw_sent = self.sentiment_backend.predict_batch(texts)
-        raw_emo = self.emotion_backend.predict_batch(texts)
+        if self.low_memory_mode:
+            with self._inference_lock:
+                if hasattr(self.sentiment_backend, "load"):
+                    self.sentiment_backend.load()
+                raw_sent = self.sentiment_backend.predict_batch(texts)
+                if hasattr(self.sentiment_backend, "unload"):
+                    self.sentiment_backend.unload()
+
+                if hasattr(self.emotion_backend, "load"):
+                    self.emotion_backend.load()
+                raw_emo = self.emotion_backend.predict_batch(texts)
+                if hasattr(self.emotion_backend, "unload"):
+                    self.emotion_backend.unload()
+        else:
+            raw_sent = self.sentiment_backend.predict_batch(texts)
+            raw_emo = self.emotion_backend.predict_batch(texts)
         return (
             [self._build_sentiment_prediction(s) for s in raw_sent],
             [self._build_emotion_prediction(e) for e in raw_emo],
