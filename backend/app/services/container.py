@@ -5,8 +5,10 @@ from typing import Optional
 from app.core.config import Settings
 from app.core.exceptions import EngineNotReadyError
 from app.core.logging import get_logger
+from app.services.affect_analysis_service import AffectAnalysisService
 from app.services.dataset_service import DatasetService
 from app.services.embedding_service import EmbeddingService
+from app.services.emotion_review_store import EmotionReviewStore
 from app.services.evaluation_service import EvaluationService
 from app.services.semantic_map_service import SemanticMapService
 from app.services.similarity_service import SimilarityService
@@ -44,6 +46,17 @@ class ServiceContainer:
             semantic_map_service=self.semantic_map_service,
             similarity_service=self.similarity_service,
         )
+        self.affect_analysis_service = AffectAnalysisService(
+            artifacts_dir=settings.artifacts_dir,
+            sentiment_model_name=settings.sentiment_model_name,
+            emotion_model_name=settings.emotion_model_name,
+            sentiment_prob_threshold=settings.sentiment_uncertainty_prob_threshold,
+            sentiment_margin_threshold=settings.sentiment_uncertainty_margin_threshold,
+            emotion_prob_threshold=settings.emotion_uncertainty_prob_threshold,
+        )
+        self.emotion_review_store = EmotionReviewStore(
+            db_path=settings.emotion_reviews_db_path
+        )
         self.startup_error: Optional[str] = None
 
     @property
@@ -54,6 +67,15 @@ class ServiceContainer:
             and self.embedding_service.is_loaded
             and self.steering_service.is_ready
             and self.semantic_map_service.is_fitted
+        )
+
+    @property
+    def affect_is_ready(self) -> bool:
+        """Return True when sentiment & emotion classifiers are ready."""
+        return (
+            self.is_ready
+            and self.affect_analysis_service.models_loaded
+            and self.affect_analysis_service.is_initialized
         )
 
     def ensure_ready(self) -> None:
@@ -99,7 +121,11 @@ class ServiceContainer:
                 self.semantic_map_service.corpus_embeddings
             )
             self.semantic_map_service.set_corpus_concept_scores(corpus_scores)
-            logger.info("VectiQ ML pipeline initialized and ready.")
+            self.emotion_review_store.initialize()
+            self.affect_analysis_service.initialize(
+                self.dataset_service, save_artifacts=save_artifacts
+            )
+            logger.info("VectiQ ML and emotion pipelines initialized and ready.")
         except Exception as exc:
             self.startup_error = str(exc)
             logger.exception("Failed to initialize VectiQ ML pipeline: %s", exc)

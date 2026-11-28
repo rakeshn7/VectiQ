@@ -1,10 +1,11 @@
 import React, { useMemo, useState } from 'react';
-import { Compass, Focus, Globe, RotateCcw } from 'lucide-react';
+import { Compass, Focus, Globe, Network, Orbit, RotateCcw, Eye, EyeOff } from 'lucide-react';
 import type { Data, Layout, PlotMouseEvent } from 'plotly.js';
 import { PlotlyChart } from '@/components/charts/PlotlyChart';
 import { EmptyState } from '@/components/ui';
 import type {
   Coordinate3D,
+  EmotionCategory,
   EvaluationStep,
   NearestNeighborItem,
   SemanticMapPoint,
@@ -13,12 +14,28 @@ import type {
 import { formatNumber, formatSigned } from '@/utils/format';
 
 export type SpaceViewMode = '2d' | '3d';
+export type RelationshipLayoutMode = 'umap' | 'radial';
+
+export const EMOTION_COLOR_MAP: Record<EmotionCategory, { color: string; label: string }> = {
+  joy: { color: '#D97706', label: 'Joy / Happiness' },
+  sadness: { color: '#2563EB', label: 'Sadness' },
+  anger: { color: '#DC2626', label: 'Anger' },
+  fear: { color: '#7C3AED', label: 'Fear' },
+  surprise: { color: '#0891B2', label: 'Surprise' },
+  disgust: { color: '#65A30D', label: 'Disgust' },
+  love: { color: '#BE185D', label: 'Love' },
+  neutral: { color: '#64748B', label: 'Neutral' },
+  other: { color: '#0F766E', label: 'Other' },
+  uncertain: { color: '#B45309', label: 'Uncertain' },
+};
 
 export interface HighlightPoint {
   label: string;
   text: string;
   coordinates: Coordinate3D;
   conceptScore?: number;
+  emotion?: EmotionCategory | null;
+  sentiment?: string | null;
 }
 
 export interface SemanticSpacePlotProps {
@@ -32,6 +49,7 @@ export interface SemanticSpacePlotProps {
   originalNeighbors?: NearestNeighborItem[];
   steeredNeighbors?: NearestNeighborItem[];
   trajectorySteps?: EvaluationStep[];
+  colorBy?: 'category' | 'emotion';
   title?: string;
   heightClassName?: string;
   emptyTitle?: string;
@@ -54,6 +72,108 @@ function computeAxisBounds(values: number[], minSpan = 1.2): [number, number] {
   return [min - pad, max + pad];
 }
 
+function buildBezierCurve2D(
+  pairs: Array<{ from: Coordinate3D; to: Coordinate3D }>,
+  curvature = 0.2
+): { x: Array<number | null>; y: Array<number | null> } {
+  const x: Array<number | null> = [];
+  const y: Array<number | null> = [];
+  const steps = 10;
+
+  pairs.forEach(({ from, to }, idx) => {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 1e-6) return;
+    const sign = idx % 2 === 0 ? 1 : -1;
+    const nx = (-dy / len) * sign;
+    const ny = (dx / len) * sign;
+    const cx = (from.x + to.x) * 0.5 + curvature * len * nx;
+    const cy = (from.y + to.y) * 0.5 + curvature * len * ny;
+
+    for (let s = 0; s <= steps; s++) {
+      const t = s / steps;
+      const omt = 1 - t;
+      x.push(omt * omt * from.x + 2 * omt * t * cx + t * t * to.x);
+      y.push(omt * omt * from.y + 2 * omt * t * cy + t * t * to.y);
+    }
+    x.push(null);
+    y.push(null);
+  });
+
+  return { x, y };
+}
+
+function buildBezierCurve3D(
+  pairs: Array<{ from: Coordinate3D; to: Coordinate3D }>,
+  curvature = 0.2
+): { x: Array<number | null>; y: Array<number | null>; z: Array<number | null> } {
+  const x: Array<number | null> = [];
+  const y: Array<number | null> = [];
+  const z: Array<number | null> = [];
+  const steps = 10;
+
+  pairs.forEach(({ from, to }, idx) => {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const dz = to.z - from.z;
+    const len = Math.hypot(dx, dy, dz);
+    if (len < 1e-6) return;
+    const sign = idx % 2 === 0 ? 1 : -1;
+    const ax = Math.abs(dx / len) < 0.9 ? 1 : 0;
+    const ay = Math.abs(dx / len) < 0.9 ? 0 : 1;
+    let nx = dy * 0 - dz * ay;
+    let ny = dz * ax - dx * 0;
+    let nz = dx * ay - dy * ax;
+    const nLen = Math.hypot(nx, ny, nz) || 1;
+    nx = (nx / nLen) * sign;
+    ny = (ny / nLen) * sign;
+    nz = (nz / nLen) * sign;
+
+    const cx = (from.x + to.x) * 0.5 + curvature * len * nx;
+    const cy = (from.y + to.y) * 0.5 + curvature * len * ny;
+    const cz = (from.z + to.z) * 0.5 + curvature * len * nz;
+
+    for (let s = 0; s <= steps; s++) {
+      const t = s / steps;
+      const omt = 1 - t;
+      x.push(omt * omt * from.x + 2 * omt * t * cx + t * t * to.x);
+      y.push(omt * omt * from.y + 2 * omt * t * cy + t * t * to.y);
+      z.push(omt * omt * from.z + 2 * omt * t * cz + t * t * to.z);
+    }
+    x.push(null);
+    y.push(null);
+    z.push(null);
+  });
+
+  return { x, y, z };
+}
+
+function buildRadialNeighborCoords(
+  items: NearestNeighborItem[],
+  center: Coordinate3D,
+  angleOffset = -Math.PI / 2,
+  angleSpan = 2 * Math.PI
+): Coordinate3D[] {
+  if (items.length === 0) return [];
+  const sims = items.map((i) => i.cosine_similarity);
+  const minSim = Math.min(...sims);
+  const maxSim = Math.max(...sims);
+  const simSpan = Math.max(maxSim - minSim, 0.05);
+
+  return items.map((item, idx) => {
+    const rankFrac = (maxSim - item.cosine_similarity) / simSpan;
+    const radius = 0.42 + 0.58 * rankFrac;
+    const stepAngle = items.length === 1 ? 0 : (angleSpan * idx) / items.length;
+    const theta = angleOffset + stepAngle;
+    return {
+      x: center.x + radius * Math.cos(theta),
+      y: center.y + radius * Math.sin(theta),
+      z: center.z + 0.16 * Math.sin(2 * theta),
+    };
+  });
+}
+
 export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
   mode,
   semanticMap,
@@ -65,6 +185,7 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
   originalNeighbors,
   steeredNeighbors,
   trajectorySteps,
+  colorBy = 'category',
   title,
   heightClassName = 'h-[460px]',
   emptyTitle = 'No Semantic Points to Display',
@@ -74,10 +195,19 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
   const is3D = mode === '3d';
   const [focusActiveVector, setFocusActiveVector] = useState<boolean>(false);
   const [viewResetCount, setViewResetCount] = useState<number>(0);
+  const [showHighlightedLinks, setShowHighlightedLinks] = useState<boolean>(true);
+  const [relationshipLayout, setRelationshipLayout] =
+    useState<RelationshipLayoutMode>('umap');
 
+  const hasActiveNeighbors = Boolean(
+    (originalNeighbors && originalNeighbors.length > 0) ||
+      (steeredNeighbors && steeredNeighbors.length > 0)
+  );
   const hasActiveOverlay = Boolean(
     originalPoint || steeredPoint || (trajectorySteps && trajectorySteps.length > 0)
   );
+  const effectiveLayout: RelationshipLayoutMode =
+    hasActiveNeighbors && relationshipLayout === 'radial' ? 'radial' : 'umap';
 
   // Build deterministic revision keys so Plotly always re-draws when coordinates/inputs change
   const activeVectorKey = useMemo(() => {
@@ -96,37 +226,382 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
   const dataSignature = useMemo(() => {
     const pts = visiblePoints ?? semanticMap?.points ?? [];
     const ptsKey = `${pts.length}:${pts[0]?.id ?? ''}:${pts[pts.length - 1]?.id ?? ''}`;
-    return `${mode}|${focusActiveVector ? 'focus' : 'full'}|${ptsKey}|${selectedCorpusPointId ?? ''}|${activeVectorKey}`;
-  }, [mode, focusActiveVector, visiblePoints, semanticMap, selectedCorpusPointId, activeVectorKey]);
+    return `${mode}|${effectiveLayout}|${colorBy}|${showHighlightedLinks ? 'links' : 'nolinks'}|${focusActiveVector ? 'focus' : 'full'}|${ptsKey}|${selectedCorpusPointId ?? ''}|${activeVectorKey}`;
+  }, [
+    mode,
+    effectiveLayout,
+    colorBy,
+    showHighlightedLinks,
+    focusActiveVector,
+    visiblePoints,
+    semanticMap,
+    selectedCorpusPointId,
+    activeVectorKey,
+  ]);
 
   const traces = useMemo<Data[]>(() => {
     const result: Data[] = [];
     const points = visiblePoints ?? semanticMap?.points ?? [];
     const clusters = semanticMap?.clusters ?? [];
 
-    // 1. Background corpus clusters (subdued when an active steering vector or trajectory is overlaid)
+    const pointMetaById = new Map<string, SemanticMapPoint>();
+    for (const pt of semanticMap?.points ?? points) {
+      pointMetaById.set(pt.id, pt);
+    }
+
+    // Visual Radial Mode preserves original 384D embeddings & UMAP data while presenting actual neighbors circularly
+    if (effectiveLayout === 'radial' && (originalPoint || steeredPoint || selectedCorpusPointId)) {
+      const selectedCorpus = selectedCorpusPointId
+        ? points.find((p) => p.id === selectedCorpusPointId) ?? null
+        : null;
+      const baseAnchor = originalPoint ?? (selectedCorpus ? {
+        label: `Selected (${selectedCorpus.id})`,
+        text: selectedCorpus.text,
+        coordinates: selectedCorpus.coordinates,
+        emotion: (selectedCorpus.human_emotion_label ?? selectedCorpus.emotion_label ?? null) as EmotionCategory | null,
+      } : null);
+
+      // 1. Subdued background corpus points normalized around outer ring context
+      if (points.length > 0) {
+        const xs = points.map((p) => p.coordinates.x);
+        const ys = points.map((p) => p.coordinates.y);
+        const zs = points.map((p) => p.coordinates.z);
+        const midX = (Math.min(...xs) + Math.max(...xs)) * 0.5;
+        const midY = (Math.min(...ys) + Math.max(...ys)) * 0.5;
+        const midZ = (Math.min(...zs) + Math.max(...zs)) * 0.5;
+        const scale = Math.max(
+          Math.max(...xs) - Math.min(...xs),
+          Math.max(...ys) - Math.min(...ys),
+          1
+        );
+        const normPts = points.map((p) => ({
+          x: ((p.coordinates.x - midX) / scale) * 2.5,
+          y: ((p.coordinates.y - midY) / scale) * 2.5,
+          z: ((p.coordinates.z - midZ) / scale) * 2.2,
+        }));
+
+        if (is3D) {
+          result.push({
+            type: 'scatter3d',
+            mode: 'markers',
+            name: 'Subdued Corpus Context',
+            x: normPts.map((c) => c.x),
+            y: normPts.map((c) => c.y),
+            z: normPts.map((c) => c.z),
+            hoverinfo: 'skip',
+            marker: { size: 3, color: '#94A3B8', opacity: 0.14 },
+          });
+        } else {
+          result.push({
+            type: points.length > 500 ? 'scattergl' : 'scatter',
+            mode: 'markers',
+            name: 'Subdued Corpus Context',
+            x: normPts.map((c) => c.x),
+            y: normPts.map((c) => c.y),
+            hoverinfo: 'skip',
+            marker: { size: 5.5, color: '#94A3B8', opacity: 0.14 },
+          });
+        }
+      }
+
+      const bothActive = Boolean(baseAnchor && steeredPoint);
+      const origCenter: Coordinate3D = bothActive ? { x: -0.45, y: 0, z: 0 } : { x: 0, y: 0, z: 0 };
+      const steerCenter: Coordinate3D = { x: 0.45, y: 0, z: 0 };
+
+      const origList = originalNeighbors ?? [];
+      const steerList = steeredNeighbors ?? [];
+      const origRadCoords = buildRadialNeighborCoords(
+        origList,
+        origCenter,
+        bothActive ? (Math.PI * 0.55) : (-Math.PI / 2),
+        bothActive ? Math.PI * 1.15 : Math.PI * 2
+      );
+      const steerRadCoords = buildRadialNeighborCoords(
+        steerList,
+        steerCenter,
+        -Math.PI * 0.45,
+        Math.PI * 1.15
+      );
+
+      // Curved Bezier relationship edges
+      if (showHighlightedLinks && baseAnchor && origRadCoords.length > 0) {
+        const pairs = origRadCoords.map((rc) => ({ from: origCenter, to: rc }));
+        if (is3D) {
+          const c3 = buildBezierCurve3D(pairs, 0.22);
+          result.push({
+            type: 'scatter3d',
+            mode: 'lines',
+            name: 'Highlighted Neighbor Links',
+            x: c3.x,
+            y: c3.y,
+            z: c3.z,
+            hoverinfo: 'skip',
+            line: { width: 3.2, color: 'rgba(27, 46, 75, 0.65)' },
+          });
+        } else {
+          const c2 = buildBezierCurve2D(pairs, 0.22);
+          result.push({
+            type: 'scatter',
+            mode: 'lines',
+            name: 'Highlighted Neighbor Links',
+            x: c2.x,
+            y: c2.y,
+            hoverinfo: 'skip',
+            line: { width: 2.0, color: 'rgba(27, 46, 75, 0.62)' },
+          });
+        }
+      }
+
+      if (showHighlightedLinks && steeredPoint && steerRadCoords.length > 0) {
+        const pairs = steerRadCoords.map((rc) => ({ from: steerCenter, to: rc }));
+        if (is3D) {
+          const c3 = buildBezierCurve3D(pairs, 0.22);
+          result.push({
+            type: 'scatter3d',
+            mode: 'lines',
+            name: 'Steered Neighbor Links',
+            x: c3.x,
+            y: c3.y,
+            z: c3.z,
+            hoverinfo: 'skip',
+            line: { width: 3.2, color: 'rgba(15, 118, 110, 0.68)' },
+          });
+        } else {
+          const c2 = buildBezierCurve2D(pairs, 0.22);
+          result.push({
+            type: 'scatter',
+            mode: 'lines',
+            name: 'Steered Neighbor Links',
+            x: c2.x,
+            y: c2.y,
+            hoverinfo: 'skip',
+            line: { width: 2.0, color: 'rgba(15, 118, 110, 0.68)' },
+          });
+        }
+      }
+
+      if (baseAnchor && steeredPoint) {
+        const bridge = buildBezierCurve2D([{ from: origCenter, to: steerCenter }], 0.18);
+        if (is3D) {
+          const bridge3 = buildBezierCurve3D([{ from: origCenter, to: steerCenter }], 0.18);
+          result.push({
+            type: 'scatter3d',
+            mode: 'lines',
+            name: 'Steering Shift',
+            x: bridge3.x,
+            y: bridge3.y,
+            z: bridge3.z,
+            hoverinfo: 'skip',
+            line: { width: 4.5, color: '#B45309', dash: 'dash' },
+          });
+        } else {
+          result.push({
+            type: 'scatter',
+            mode: 'lines',
+            name: 'Steering Shift',
+            x: bridge.x,
+            y: bridge.y,
+            hoverinfo: 'skip',
+            line: { width: 2.4, color: '#B45309', dash: 'dash' },
+          });
+        }
+      }
+
+      if (origList.length > 0) {
+        const hover = origList.map((n) => {
+          const meta = pointMetaById.get(n.id);
+          const emo = meta?.human_emotion_label ?? meta?.emotion_label;
+          return (
+            `<b>Neighbor (${n.category})</b><br>${truncateText(n.text)}` +
+            `<br>384D Cosine Sim: ${formatNumber(n.cosine_similarity, 4)}` +
+            (emo ? `<br>Emotion: ${EMOTION_COLOR_MAP[emo]?.label ?? emo}` : '') +
+            `<br>Original UMAP: (${formatNumber(n.coordinates.x, 3)}, ${formatNumber(n.coordinates.y, 3)}, ${formatNumber(n.coordinates.z, 3)})`
+          );
+        });
+        const colors = origList.map((n) => {
+          const meta = pointMetaById.get(n.id);
+          const emo = meta?.human_emotion_label ?? meta?.emotion_label;
+          return emo ? EMOTION_COLOR_MAP[emo]?.color ?? '#3E5C8A' : '#3E5C8A';
+        });
+        if (is3D) {
+          result.push({
+            type: 'scatter3d',
+            mode: 'text+markers',
+            name: 'Nearest Neighbors (Radial Rank)',
+            x: origRadCoords.map((c) => c.x),
+            y: origRadCoords.map((c) => c.y),
+            z: origRadCoords.map((c) => c.z),
+            text: origList.map((n) => `#${origList.indexOf(n) + 1} (${n.cosine_similarity.toFixed(2)})`),
+            hovertext: hover,
+            customdata: origList.map((n) => n.id),
+            hovertemplate: '%{hovertext}<extra></extra>',
+            textfont: { size: 10, color: '#334155' },
+            marker: { size: 7.5, color: colors, line: { width: 1.8, color: '#1B2E4B' } },
+          });
+        } else {
+          result.push({
+            type: 'scatter',
+            mode: 'text+markers',
+            name: 'Nearest Neighbors (Radial Rank)',
+            x: origRadCoords.map((c) => c.x),
+            y: origRadCoords.map((c) => c.y),
+            text: origList.map((n) => `#${origList.indexOf(n) + 1} (${n.cosine_similarity.toFixed(2)})`),
+            textposition: 'top center',
+            hovertext: hover,
+            customdata: origList.map((n) => n.id),
+            hovertemplate: '%{hovertext}<extra></extra>',
+            textfont: { size: 10, color: '#334155', family: 'JetBrains Mono, monospace' },
+            marker: { size: 13, color: colors, line: { width: 2.2, color: '#1B2E4B' } },
+          });
+        }
+      }
+
+      if (steerList.length > 0) {
+        const hover = steerList.map(
+          (n) =>
+            `<b>Steered Neighbor (${n.category})</b><br>${truncateText(n.text)}<br>Cosine Sim: ${formatNumber(n.cosine_similarity, 4)}`
+        );
+        if (is3D) {
+          result.push({
+            type: 'scatter3d',
+            mode: 'markers',
+            name: 'Steered Neighbors (Radial)',
+            x: steerRadCoords.map((c) => c.x),
+            y: steerRadCoords.map((c) => c.y),
+            z: steerRadCoords.map((c) => c.z),
+            text: hover,
+            hovertemplate: '%{text}<extra></extra>',
+            marker: { size: 7.5, color: '#0F766E', symbol: 'diamond' },
+          });
+        } else {
+          result.push({
+            type: 'scatter',
+            mode: 'markers',
+            name: 'Steered Neighbors (Radial)',
+            x: steerRadCoords.map((c) => c.x),
+            y: steerRadCoords.map((c) => c.y),
+            text: hover,
+            hovertemplate: '%{text}<extra></extra>',
+            marker: { size: 12, color: 'rgba(15, 118, 110, 0.20)', symbol: 'diamond', line: { width: 2, color: '#0F766E' } },
+          });
+        }
+      }
+
+      if (baseAnchor) {
+        const centerColor = baseAnchor.emotion
+          ? EMOTION_COLOR_MAP[baseAnchor.emotion]?.color ?? '#1B2E4B'
+          : '#1B2E4B';
+        const centerHover =
+          `<b>${baseAnchor.label}</b><br>${truncateText(baseAnchor.text)}` +
+          (baseAnchor.emotion ? `<br>Emotion: ${EMOTION_COLOR_MAP[baseAnchor.emotion]?.label ?? baseAnchor.emotion}` : '') +
+          `<br>UMAP Coords: (${formatNumber(baseAnchor.coordinates.x, 3)}, ${formatNumber(baseAnchor.coordinates.y, 3)}, ${formatNumber(baseAnchor.coordinates.z, 3)})`;
+        if (is3D) {
+          result.push({
+            type: 'scatter3d',
+            mode: 'text+markers',
+            name: baseAnchor.label,
+            x: [origCenter.x],
+            y: [origCenter.y],
+            z: [origCenter.z],
+            text: [baseAnchor.label],
+            hovertext: [centerHover],
+            hovertemplate: '%{hovertext}<extra></extra>',
+            textposition: 'top center',
+            textfont: { size: 11, color: '#132033' },
+            marker: { size: 12, color: centerColor, symbol: 'circle', line: { width: 3, color: '#132033' } },
+          });
+        } else {
+          result.push({
+            type: 'scatter',
+            mode: 'text+markers',
+            name: baseAnchor.label,
+            x: [origCenter.x],
+            y: [origCenter.y],
+            text: [baseAnchor.label],
+            hovertext: [centerHover],
+            hovertemplate: '%{hovertext}<extra></extra>',
+            textposition: 'bottom center',
+            textfont: { size: 11, color: '#132033' },
+            marker: { size: 18, color: centerColor, symbol: 'circle', line: { width: 3, color: '#132033' } },
+          });
+        }
+      }
+
+      if (steeredPoint) {
+        const steerHover = `<b>${steeredPoint.label}</b><br>${truncateText(steeredPoint.text)}`;
+        if (is3D) {
+          result.push({
+            type: 'scatter3d',
+            mode: 'text+markers',
+            name: steeredPoint.label,
+            x: [steerCenter.x],
+            y: [steerCenter.y],
+            z: [steerCenter.z],
+            text: [steeredPoint.label],
+            hovertext: [steerHover],
+            hovertemplate: '%{hovertext}<extra></extra>',
+            marker: { size: 11, color: '#0F766E', symbol: 'diamond', line: { width: 2, color: '#FFFFFF' } },
+          });
+        } else {
+          result.push({
+            type: 'scatter',
+            mode: 'text+markers',
+            name: steeredPoint.label,
+            x: [steerCenter.x],
+            y: [steerCenter.y],
+            text: [steeredPoint.label],
+            hovertext: [steerHover],
+            hovertemplate: '%{hovertext}<extra></extra>',
+            textposition: 'bottom center',
+            marker: { size: 15, color: '#0F766E', symbol: 'diamond', line: { width: 2.5, color: '#FFFFFF' } },
+          });
+        }
+      }
+
+      return result;
+    }
+
+    // 1. Background corpus clusters (subdued when an active overlay or selected neighbors are shown)
     if (points.length > 0) {
       const grouped = new Map<string, SemanticMapPoint[]>();
       for (const pt of points) {
-        const key = pt.category || 'uncategorized';
+        const key =
+          colorBy === 'emotion'
+            ? pt.human_emotion_label || pt.emotion_label || 'neutral'
+            : pt.category || 'uncategorized';
         const list = grouped.get(key) ?? [];
         list.push(pt);
         grouped.set(key, list);
       }
 
-      grouped.forEach((groupPoints, category) => {
-        const clusterMeta = clusters.find((c) => c.id === category);
-        const color = clusterMeta?.color || '#64748b';
-        const label = clusterMeta?.label || category;
+      grouped.forEach((groupPoints, groupKey) => {
+        const clusterMeta = clusters.find((c) => c.id === groupKey);
+        const emoMeta =
+          colorBy === 'emotion'
+            ? EMOTION_COLOR_MAP[groupKey as EmotionCategory]
+            : undefined;
+        const color = emoMeta?.color || clusterMeta?.color || '#64748b';
+        const label = emoMeta?.label || clusterMeta?.label || groupKey;
 
-        const hoverTexts = groupPoints.map(
-          (p) =>
+        const hoverTexts = groupPoints.map((p) => {
+          const effEmo = p.human_emotion_label || p.emotion_label;
+          const emoStr = effEmo
+            ? `<br>Emotion: <b>${EMOTION_COLOR_MAP[effEmo]?.label ?? effEmo}</b>${p.human_emotion_label ? ' (verified)' : ''}`
+            : '';
+          const sentStr = p.sentiment_label
+            ? ` | Sentiment Polarity: ${p.sentiment_is_uncertain ? 'uncertain' : p.sentiment_label}`
+            : '';
+          return (
             `<b>${label}</b><br>` +
             `${truncateText(p.text)}<br>` +
-            `Coords: (${formatNumber(p.coordinates?.x, 3)}, ${formatNumber(p.coordinates?.y, 3)}, ${formatNumber(p.coordinates?.z, 3)})<br>` +
-            `Sentiment: ${formatNumber(p.concept_scores?.positive_sentiment, 3)} | Tech: ${formatNumber(p.concept_scores?.technical_tone, 3)} | Formal: ${formatNumber(p.concept_scores?.formal_tone, 3)}`
-        );
+            `Coords: (${formatNumber(p.coordinates?.x, 3)}, ${formatNumber(p.coordinates?.y, 3)}, ${formatNumber(p.coordinates?.z, 3)})` +
+            emoStr +
+            sentStr +
+            `<br>Concept Scores: S=${formatNumber(p.concept_scores?.positive_sentiment, 3)} | T=${formatNumber(p.concept_scores?.technical_tone, 3)} | F=${formatNumber(p.concept_scores?.formal_tone, 3)}`
+          );
+        });
 
+        const hasFocus = hasActiveOverlay || Boolean(selectedCorpusPointId && hasActiveNeighbors);
         if (is3D) {
           result.push({
             type: 'scatter3d',
@@ -139,9 +614,9 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
             customdata: groupPoints.map((p) => p.id),
             hovertemplate: '%{text}<extra></extra>',
             marker: {
-              size: hasActiveOverlay ? 3.5 : 5,
+              size: hasFocus ? 3.5 : 5,
               color,
-              opacity: hasActiveOverlay ? 0.2 : 0.85,
+              opacity: hasFocus ? 0.2 : 0.85,
               line: { width: 0.5, color: '#FFFFFF' },
             },
           });
@@ -156,14 +631,82 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
             customdata: groupPoints.map((p) => p.id),
             hovertemplate: '%{text}<extra></extra>',
             marker: {
-              size: hasActiveOverlay ? 6 : 8,
+              size: hasFocus ? 6 : 8,
               color,
-              opacity: hasActiveOverlay ? 0.22 : 0.88,
+              opacity: hasFocus ? 0.22 : 0.88,
               line: { width: 1, color: '#FFFFFF' },
             },
           });
         }
       });
+    }
+
+    // 1.5 Smooth Curved Highlighted Connections in Original UMAP Geometry
+    if (showHighlightedLinks) {
+      const selectedCorpus = selectedCorpusPointId
+        ? points.find((p) => p.id === selectedCorpusPointId) ?? null
+        : null;
+      const anchorCoord = originalPoint?.coordinates ?? selectedCorpus?.coordinates ?? null;
+      if (anchorCoord && originalNeighbors && originalNeighbors.length > 0) {
+        const origPairs = originalNeighbors.map((n) => ({
+          from: anchorCoord,
+          to: n.coordinates,
+        }));
+        if (is3D) {
+          const c3 = buildBezierCurve3D(origPairs, 0.2);
+          result.push({
+            type: 'scatter3d',
+            mode: 'lines',
+            name: 'Highlighted Neighbor Links',
+            x: c3.x,
+            y: c3.y,
+            z: c3.z,
+            hoverinfo: 'skip',
+            line: { width: 3.0, color: 'rgba(27, 46, 75, 0.62)' },
+          });
+        } else {
+          const c2 = buildBezierCurve2D(origPairs, 0.2);
+          result.push({
+            type: 'scatter',
+            mode: 'lines',
+            name: 'Highlighted Neighbor Links',
+            x: c2.x,
+            y: c2.y,
+            hoverinfo: 'skip',
+            line: { width: 1.9, color: 'rgba(27, 46, 75, 0.58)' },
+          });
+        }
+      }
+      if (steeredPoint && steeredNeighbors && steeredNeighbors.length > 0) {
+        const steerPairs = steeredNeighbors.map((n) => ({
+          from: steeredPoint.coordinates,
+          to: n.coordinates,
+        }));
+        if (is3D) {
+          const c3 = buildBezierCurve3D(steerPairs, 0.2);
+          result.push({
+            type: 'scatter3d',
+            mode: 'lines',
+            name: 'Steered Neighbor Links',
+            x: c3.x,
+            y: c3.y,
+            z: c3.z,
+            hoverinfo: 'skip',
+            line: { width: 3.0, color: 'rgba(15, 118, 110, 0.62)' },
+          });
+        } else {
+          const c2 = buildBezierCurve2D(steerPairs, 0.2);
+          result.push({
+            type: 'scatter',
+            mode: 'lines',
+            name: 'Steered Neighbor Links',
+            x: c2.x,
+            y: c2.y,
+            hoverinfo: 'skip',
+            line: { width: 1.9, color: 'rgba(15, 118, 110, 0.60)' },
+          });
+        }
+      }
     }
 
     // 2. Selected corpus point highlight
@@ -380,11 +923,15 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
         ? 'top center'
         : 'bottom center';
 
-    // 6. Original Point Marker
+    // 6. Original Point Marker (colored distinctly by emotion when provided)
     if (originalPoint) {
+      const emoMeta = originalPoint.emotion ? EMOTION_COLOR_MAP[originalPoint.emotion] : undefined;
+      const pointFill = emoMeta?.color ?? '#1B2E4B';
       const hover =
         `<b>${originalPoint.label}</b><br>` +
         `${truncateText(originalPoint.text)}<br>` +
+        (emoMeta ? `Predicted Emotion: <b>${emoMeta.label}</b><br>` : '') +
+        (originalPoint.sentiment ? `Sentiment: <b>${originalPoint.sentiment}</b><br>` : '') +
         `Coords: (${formatNumber(originalPoint.coordinates?.x, 3)}, ${formatNumber(originalPoint.coordinates?.y, 3)}, ${formatNumber(originalPoint.coordinates?.z, 3)})` +
         (originalPoint.conceptScore !== undefined
           ? `<br>Concept Score: ${formatNumber(originalPoint.conceptScore, 4)}`
@@ -394,7 +941,7 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
         result.push({
           type: 'scatter3d',
           mode: 'text+markers',
-          name: originalPoint.label,
+          name: emoMeta ? `${originalPoint.label} (${emoMeta.label})` : originalPoint.label,
           x: [originalPoint.coordinates.x],
           y: [originalPoint.coordinates.y],
           z: [originalPoint.coordinates.z],
@@ -402,31 +949,31 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
           hovertext: [hover],
           hovertemplate: '%{hovertext}<extra></extra>',
           textposition: 'top center',
-          textfont: { size: 11, color: '#1B2E4B', family: 'Inter, sans-serif' },
+          textfont: { size: 11, color: '#132033', family: 'Inter, sans-serif' },
           marker: {
-            size: 10,
-            color: '#1B2E4B',
+            size: 11.5,
+            color: pointFill,
             symbol: 'circle',
-            line: { width: 2, color: '#FFFFFF' },
+            line: { width: 3, color: '#132033' },
           },
         });
       } else {
         result.push({
           type: 'scatter',
           mode: 'text+markers',
-          name: originalPoint.label,
+          name: emoMeta ? `${originalPoint.label} (${emoMeta.label})` : originalPoint.label,
           x: [originalPoint.coordinates.x],
           y: [originalPoint.coordinates.y],
           text: [originalPoint.label],
           hovertext: [hover],
           hovertemplate: '%{hovertext}<extra></extra>',
           textposition: origTextPos,
-          textfont: { size: 11, color: '#1B2E4B', family: 'Inter, sans-serif' },
+          textfont: { size: 11, color: '#132033', family: 'Inter, sans-serif' },
           marker: {
-            size: 14,
-            color: '#1B2E4B',
+            size: 16,
+            color: pointFill,
             symbol: 'circle',
-            line: { width: 2.5, color: '#FFFFFF' },
+            line: { width: 3, color: '#132033' },
           },
         });
       }
@@ -495,6 +1042,10 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
     steeredNeighbors,
     trajectorySteps,
     is3D,
+    colorBy,
+    showHighlightedLinks,
+    effectiveLayout,
+    hasActiveNeighbors,
     hasActiveOverlay,
   ]);
 
@@ -548,7 +1099,7 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
 
   const layout = useMemo<Partial<Layout>>(() => {
     const base: Partial<Layout> = {
-      uirevision: `${mode}:${focusActiveVector ? 'focus' : 'full'}:${viewResetCount}:${activeVectorKey}`,
+      uirevision: `${mode}:${effectiveLayout}:${colorBy}:${focusActiveVector ? 'focus' : 'full'}:${viewResetCount}:${activeVectorKey}`,
       datarevision: dataSignature,
       title: title
         ? {
@@ -562,6 +1113,33 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
         : { l: 52, r: 24, t: title ? 40 : 18, b: 48 },
       dragmode: is3D ? 'orbit' : 'pan',
     };
+
+    if (effectiveLayout === 'radial') {
+      if (is3D) {
+        base.scene = {
+          bgcolor: '#FAF9F6',
+          camera: { eye: { x: 1.4, y: 1.4, z: 1.1 } },
+          xaxis: { title: { text: 'Radial Sim X (Visual Presentation)' }, gridcolor: '#E2DFD7', zerolinecolor: '#CBD5E1', range: [-1.4, 1.4] },
+          yaxis: { title: { text: 'Radial Sim Y (Visual Presentation)' }, gridcolor: '#E2DFD7', zerolinecolor: '#CBD5E1', range: [-1.4, 1.4] },
+          zaxis: { title: { text: 'Radial Depth' }, gridcolor: '#E2DFD7', zerolinecolor: '#CBD5E1', range: [-1.2, 1.2] },
+        };
+      } else {
+        base.xaxis = {
+          title: { text: 'Radial Similarity Axis X (Not UMAP)' },
+          gridcolor: '#ECEAE3',
+          zerolinecolor: '#CBD5E1',
+          range: [-1.45, 1.45],
+        };
+        base.yaxis = {
+          title: { text: 'Radial Similarity Axis Y (Not UMAP)' },
+          gridcolor: '#ECEAE3',
+          zerolinecolor: '#CBD5E1',
+          range: [-1.35, 1.35],
+          scaleanchor: 'x',
+        };
+      }
+      return base;
+    }
 
     if (is3D) {
       base.scene = {
@@ -637,6 +1215,8 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
   }, [
     is3D,
     mode,
+    effectiveLayout,
+    colorBy,
     focusActiveVector,
     viewResetCount,
     activeVectorKey,
@@ -705,8 +1285,60 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
           )}
         </div>
 
-        <div className="flex items-center gap-1.5">
-          {hasActiveOverlay && (
+        <div className="flex flex-wrap items-center gap-1.5">
+          {hasActiveNeighbors && (
+            <>
+              <button
+                type="button"
+                onClick={() => setShowHighlightedLinks((prev) => !prev)}
+                className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-medium transition-colors ${
+                  showHighlightedLinks
+                    ? 'border-brand-navy/50 bg-slate-100 text-brand-navy'
+                    : 'border-border bg-background-surface text-text-secondary hover:border-brand-slate/60 hover:text-brand-navy'
+                }`}
+              >
+                {showHighlightedLinks ? (
+                  <>
+                    <Eye className="w-3 h-3" />
+                    <span>Hide Links</span>
+                  </>
+                ) : (
+                  <>
+                    <EyeOff className="w-3 h-3" />
+                    <span>Show Links</span>
+                  </>
+                )}
+              </button>
+
+              <div className="inline-flex rounded-lg border border-border bg-background-surface p-0.5">
+                <button
+                  type="button"
+                  onClick={() => setRelationshipLayout('umap')}
+                  className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                    effectiveLayout === 'umap'
+                      ? 'bg-brand-navy text-white'
+                      : 'text-text-secondary hover:text-brand-navy'
+                  }`}
+                >
+                  <Orbit className="w-3 h-3" />
+                  <span>UMAP View</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setRelationshipLayout('radial')}
+                  className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] font-medium transition-colors ${
+                    effectiveLayout === 'radial'
+                      ? 'bg-brand-teal text-white'
+                      : 'text-text-secondary hover:text-brand-navy'
+                  }`}
+                >
+                  <Network className="w-3 h-3" />
+                  <span>Radial View</span>
+                </button>
+              </div>
+            </>
+          )}
+          {hasActiveOverlay && effectiveLayout === 'umap' && (
             <button
               type="button"
               onClick={() => setFocusActiveVector((prev) => !prev)}
@@ -740,6 +1372,15 @@ export const SemanticSpacePlot: React.FC<SemanticSpacePlotProps> = ({
           </button>
         </div>
       </div>
+
+      {effectiveLayout === 'radial' && (
+        <div className="rounded-xl border border-teal-200 bg-teal-50/70 px-3 py-2 text-[11px] text-teal-950 flex flex-wrap items-center justify-between gap-2">
+          <span>
+            <strong>Radial Relationship Presentation (Not UMAP Geometry):</strong> Active sentence centered with genuine 384D neighbors arranged circularly by similarity rank (<span className="font-mono">r ∝ 1 − cos</span>).
+          </span>
+          <span className="font-mono text-teal-800">Underlying embeddings &amp; UMAP unchanged</span>
+        </div>
+      )}
 
       <PlotlyChart
         plotKey={`${mode}:${viewResetCount}`}

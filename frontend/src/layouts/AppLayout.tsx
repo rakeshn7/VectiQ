@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { GuidedWalkthroughBanner } from '@/components/GuidedWalkthroughBanner';
 import { Header, Sidebar } from '@/components/navigation';
 import { ErrorBoundary } from '@/components/ErrorBoundary';
 
@@ -15,6 +16,7 @@ export const AppLayout: React.FC<AppLayoutProps> = ({ children }) => {
       <div className="flex-1 min-w-0 flex flex-col">
         <Header onOpenMobileMenu={() => setMobileOpen(true)} />
         <main className="flex-1 px-4 sm:px-6 lg:px-10 py-8 max-w-7xl w-full mx-auto">
+          <GuidedWalkthroughBanner />
           <ErrorBoundary fallbackTitle="Page Rendering Error">{children}</ErrorBoundary>
         </main>
       </div>

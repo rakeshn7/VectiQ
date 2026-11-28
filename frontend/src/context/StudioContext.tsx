@@ -8,7 +8,9 @@ import {
   type RawHealthPayload,
 } from '@/services';
 import type {
+  ConceptId,
   ConfigResponse,
+  EmotionAnalyzeResponse,
   EvaluateRequest,
   EvaluateResponse,
   HealthResponse,
@@ -19,6 +21,34 @@ import type {
 } from '@/types/api';
 
 export type ConnectionStatus = 'checking' | 'connected' | 'partial' | 'offline';
+export type ExperienceMode = 'simple' | 'research';
+
+export interface GuidedExperimentState {
+  active: boolean;
+  step: 1 | 2 | 3;
+  sampleText: string;
+  concept: ConceptId;
+  strength: number;
+}
+
+export const GUIDED_SAMPLE_SENTENCE =
+  'The software engineering team shipped a clean, reliable release ahead of schedule.';
+
+const EXPERIENCE_MODE_STORAGE_KEY = 'vectiq_experience_mode';
+
+function readInitialExperienceMode(): ExperienceMode {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const saved = window.localStorage.getItem(EXPERIENCE_MODE_STORAGE_KEY);
+      if (saved === 'simple' || saved === 'research') {
+        return saved;
+      }
+    }
+  } catch {
+    // Ignore storage access errors
+  }
+  return 'simple';
+}
 
 export interface StudioContextValue {
   connectionStatus: ConnectionStatus;
@@ -38,14 +68,24 @@ export interface StudioContextValue {
 
   lastSteerRequest: SteerRequest | null;
   lastSteerResult: SteerResponse | null;
+  lastSteerAffectResult: EmotionAnalyzeResponse | null;
   steerHistory: SteerResponse[];
   setActiveSteerRun: (request: SteerRequest, result: SteerResponse) => void;
+  setLastSteerAffectResult: React.Dispatch<React.SetStateAction<EmotionAnalyzeResponse | null>>;
   selectSteerResultFromHistory: (result: SteerResponse) => void;
   clearActiveSteerRun: () => void;
 
   lastEvaluateRequest: EvaluateRequest | null;
   lastEvaluateResult: EvaluateResponse | null;
   setActiveEvaluateRun: (request: EvaluateRequest, result: EvaluateResponse) => void;
+
+  experienceMode: ExperienceMode;
+  setExperienceMode: (mode: ExperienceMode) => void;
+
+  guidedExperiment: GuidedExperimentState | null;
+  startGuidedExperiment: () => GuidedExperimentState;
+  setGuidedExperimentStep: (step: 1 | 2 | 3) => void;
+  exitGuidedExperiment: () => void;
 }
 
 export const StudioContext = createContext<StudioContextValue | undefined>(undefined);
@@ -76,10 +116,48 @@ export const StudioProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const [lastSteerRequest, setLastSteerRequest] = useState<SteerRequest | null>(null);
   const [lastSteerResult, setLastSteerResult] = useState<SteerResponse | null>(null);
+  const [lastSteerAffectResult, setLastSteerAffectResult] =
+    useState<EmotionAnalyzeResponse | null>(null);
   const [steerHistory, setSteerHistory] = useState<SteerResponse[]>([]);
 
   const [lastEvaluateRequest, setLastEvaluateRequest] = useState<EvaluateRequest | null>(null);
   const [lastEvaluateResult, setLastEvaluateResult] = useState<EvaluateResponse | null>(null);
+
+  const [experienceMode, setExperienceModeState] = useState<ExperienceMode>(
+    readInitialExperienceMode
+  );
+  const [guidedExperiment, setGuidedExperiment] = useState<GuidedExperimentState | null>(null);
+
+  const setExperienceMode = useCallback((mode: ExperienceMode) => {
+    setExperienceModeState(mode);
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem(EXPERIENCE_MODE_STORAGE_KEY, mode);
+      }
+    } catch {
+      // Ignore storage access errors
+    }
+  }, []);
+
+  const startGuidedExperiment = useCallback((): GuidedExperimentState => {
+    const initial: GuidedExperimentState = {
+      active: true,
+      step: 1,
+      sampleText: GUIDED_SAMPLE_SENTENCE,
+      concept: 'formal_tone',
+      strength: 0.75,
+    };
+    setGuidedExperiment(initial);
+    return initial;
+  }, []);
+
+  const setGuidedExperimentStep = useCallback((step: 1 | 2 | 3) => {
+    setGuidedExperiment((prev) => (prev ? { ...prev, step } : null));
+  }, []);
+
+  const exitGuidedExperiment = useCallback(() => {
+    setGuidedExperiment(null);
+  }, []);
 
   const refreshBackendStatus = useCallback(async () => {
     setIsRefreshingStatus(true);
@@ -163,6 +241,7 @@ export const StudioProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const clearActiveSteerRun = useCallback(() => {
     setLastSteerRequest(null);
     setLastSteerResult(null);
+    setLastSteerAffectResult(null);
   }, []);
 
   const setActiveEvaluateRun = useCallback((request: EvaluateRequest, result: EvaluateResponse) => {
@@ -204,13 +283,21 @@ export const StudioProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       loadSemanticMap,
       lastSteerRequest,
       lastSteerResult,
+      lastSteerAffectResult,
       steerHistory,
       setActiveSteerRun,
+      setLastSteerAffectResult,
       selectSteerResultFromHistory,
       clearActiveSteerRun,
       lastEvaluateRequest,
       lastEvaluateResult,
       setActiveEvaluateRun,
+      experienceMode,
+      setExperienceMode,
+      guidedExperiment,
+      startGuidedExperiment,
+      setGuidedExperimentStep,
+      exitGuidedExperiment,
     }),
     [
       connectionStatus,
@@ -228,6 +315,7 @@ export const StudioProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       loadSemanticMap,
       lastSteerRequest,
       lastSteerResult,
+      lastSteerAffectResult,
       steerHistory,
       setActiveSteerRun,
       selectSteerResultFromHistory,
@@ -235,6 +323,12 @@ export const StudioProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       lastEvaluateRequest,
       lastEvaluateResult,
       setActiveEvaluateRun,
+      experienceMode,
+      setExperienceMode,
+      guidedExperiment,
+      startGuidedExperiment,
+      setGuidedExperimentStep,
+      exitGuidedExperiment,
     ]
   );
 

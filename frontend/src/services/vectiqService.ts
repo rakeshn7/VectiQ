@@ -1,6 +1,10 @@
 import apiClient, { API_V1_PREFIX } from '@/services/api';
 import type {
   ConfigResponse,
+  EmotionAnalyzeRequest,
+  EmotionAnalyzeResponse,
+  EmotionReviewRequest,
+  EmotionReviewResponse,
   EvaluateRequest,
   EvaluateResponse,
   HealthResponse,
@@ -49,5 +53,34 @@ export async function steerEmbedding(payload: SteerRequest): Promise<SteerRespon
 
 export async function evaluateSteering(payload: EvaluateRequest): Promise<EvaluateResponse> {
   const { data } = await apiClient.post<EvaluateResponse>(`${API_V1_PREFIX}/evaluate`, payload);
+  return data;
+}
+
+export async function analyzeSentenceAffect(
+  payload: EmotionAnalyzeRequest
+): Promise<EmotionAnalyzeResponse> {
+  const { data } = await apiClient.post<EmotionAnalyzeResponse>(
+    `${API_V1_PREFIX}/emotions/analyze`,
+    payload
+  );
+  return data;
+}
+
+export async function submitEmotionVerification(
+  payload: EmotionReviewRequest
+): Promise<EmotionReviewResponse> {
+  const { data } = await apiClient.post<EmotionReviewResponse>(
+    `${API_V1_PREFIX}/emotions/reviews`,
+    payload
+  );
+  return data;
+}
+
+export async function fetchEmotionVerification(
+  recordId: string
+): Promise<EmotionReviewResponse> {
+  const { data } = await apiClient.get<EmotionReviewResponse>(
+    `${API_V1_PREFIX}/emotions/reviews/${encodeURIComponent(recordId)}`
+  );
   return data;
 }

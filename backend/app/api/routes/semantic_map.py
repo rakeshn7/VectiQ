@@ -27,6 +27,18 @@ def get_semantic_map(
         None,
         description="Optional semantic cluster category filter.",
     ),
+    sentiment: Optional[str] = Query(
+        None,
+        description="Optional sentiment polarity filter (positive, neutral, negative, uncertain).",
+    ),
+    emotion: Optional[str] = Query(
+        None,
+        description="Optional emotion filter (joy, sadness, anger, fear, surprise, disgust, love, neutral, other, uncertain).",
+    ),
+    search: Optional[str] = Query(
+        None,
+        description="Optional case-insensitive text, ID, category, or emotion substring filter.",
+    ),
     limit: int = Query(
         250,
         ge=1,
@@ -36,10 +48,16 @@ def get_semantic_map(
     container: ServiceContainer = Depends(get_ready_container),
 ) -> SemanticMapResponse:
     """Return precomputed semantic space corpus nodes and bounds."""
+    overlays = container.emotion_review_store.list_human_overlays()
     return container.semantic_map_service.get_semantic_map(
         records=container.dataset_service.records,
         include_embeddings=include_embeddings,
         category=category,
+        sentiment=sentiment,
+        emotion=emotion,
+        search=search,
         limit=limit,
+        corpus_affect=container.affect_analysis_service.corpus_affect,
+        human_overlays=overlays,
     )
 

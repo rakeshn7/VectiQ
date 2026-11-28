@@ -31,5 +31,7 @@ def evaluate_steering(
         concept=payload.concept,
         strengths=payload.strengths,
         top_k_neighbors=payload.top_k_neighbors,
+        continuity_k=payload.continuity_k,
+        overlap_k=payload.overlap_k,
     )
 

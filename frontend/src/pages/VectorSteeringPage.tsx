@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import {
   AlertTriangle,
@@ -10,6 +10,11 @@ import {
   SlidersHorizontal,
   Sparkles,
 } from 'lucide-react';
+import {
+  EmotionAnalysisPanel,
+  formatEmotionDisplay,
+  sentimentVariant,
+} from '@/components/EmotionAnalysisPanel';
 import { NeighborList } from '@/components/NeighborList';
 import { ViewModeToggle } from '@/components/ViewModeToggle';
 import { SemanticSpacePlot, type SpaceViewMode } from '@/components/charts';
@@ -31,8 +36,13 @@ import {
   Tooltip,
 } from '@/components/ui';
 import { useStudio } from '@/hooks/useStudio';
-import { parseApiError, steerEmbedding, type ParsedApiError } from '@/services';
-import type { ConceptId } from '@/types/api';
+import {
+  analyzeSentenceAffect,
+  parseApiError,
+  steerEmbedding,
+  type ParsedApiError,
+} from '@/services';
+import type { ConceptId, HumanEmotionOverlay } from '@/types/api';
 import {
   CONTRACT_CONCEPTS,
   CONTRACT_STEERING_BOUNDS,
@@ -55,7 +65,10 @@ export const VectorSteeringPage: React.FC = () => {
   const routeState = (location.state as {
     prefillText?: string;
     prefillConcept?: ConceptId;
+    prefillStrength?: number;
+    autoRunGuided?: boolean;
   } | null) ?? null;
+  const guidedAutoRunRef = useRef<string | null>(null);
 
   const {
     config,
@@ -64,7 +77,9 @@ export const VectorSteeringPage: React.FC = () => {
     loadSemanticMap,
     lastSteerRequest,
     lastSteerResult,
+    lastSteerAffectResult,
     setActiveSteerRun,
+    setLastSteerAffectResult,
     clearActiveSteerRun,
   } = useStudio();
 
@@ -90,7 +105,11 @@ export const VectorSteeringPage: React.FC = () => {
   const [showCorpusOverlay, setShowCorpusOverlay] = useState<boolean>(true);
   const [loading, setLoading] = useState<boolean>(false);
   const [apiError, setApiError] = useState<ParsedApiError | null>(null);
+  const [affectLoading, setAffectLoading] = useState<boolean>(false);
+  const [affectError, setAffectError] = useState<ParsedApiError | null>(null);
   const [validationError, setValidationError] = useState<string | undefined>();
+  const steerSeqRef = useRef<number>(0);
+  const affectSeqRef = useRef<number>(0);
 
   useEffect(() => {
     if (routeState?.prefillText) {
@@ -100,7 +119,27 @@ export const VectorSteeringPage: React.FC = () => {
     if (routeState?.prefillConcept) {
       setConcept(routeState.prefillConcept);
     }
-  }, [routeState?.prefillText, routeState?.prefillConcept]);
+    if (typeof routeState?.prefillStrength === 'number') {
+      setStrength(routeState.prefillStrength);
+    }
+    if (routeState?.autoRunGuided && routeState.prefillText) {
+      const sig = `${routeState.prefillText}:${routeState.prefillConcept ?? ''}:${String(routeState.prefillStrength ?? '')}`;
+      if (guidedAutoRunRef.current !== sig) {
+        guidedAutoRunRef.current = sig;
+        void executeSteering({
+          text: routeState.prefillText,
+          concept: routeState.prefillConcept ?? concept,
+          strength: routeState.prefillStrength ?? strength,
+        });
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    routeState?.prefillText,
+    routeState?.prefillConcept,
+    routeState?.prefillStrength,
+    routeState?.autoRunGuided,
+  ]);
 
   useEffect(() => {
     void loadSemanticMap();
@@ -126,8 +165,39 @@ export const VectorSteeringPage: React.FC = () => {
     );
   }, [lastSteerResult]);
 
-  const executeSteering = async () => {
-    const trimmed = text.trim();
+  const runAffectAnalysis = async (
+    trimmedText: string,
+    affectSeq: number,
+    conceptOverride?: ConceptId
+  ) => {
+    try {
+      const response = await analyzeSentenceAffect({
+        text: trimmedText,
+        concept: conceptOverride ?? concept,
+        top_k_neighbors: topK,
+        include_embeddings: false,
+      });
+      if (affectSeq !== affectSeqRef.current) return;
+      setLastSteerAffectResult(response);
+      setAffectError(null);
+    } catch (err) {
+      if (affectSeq !== affectSeqRef.current) return;
+      setAffectError(parseApiError(err));
+    } finally {
+      if (affectSeq === affectSeqRef.current) {
+        setAffectLoading(false);
+      }
+    }
+  };
+
+  const executeSteering = async (override?: {
+    text?: string;
+    concept?: ConceptId;
+    strength?: number;
+  }) => {
+    const trimmed = (override?.text ?? text).trim();
+    const targetConcept = override?.concept ?? concept;
+    const targetStrength = override?.strength ?? strength;
     if (!trimmed) {
       setValidationError('Please enter input text (1–1000 characters).');
       return;
@@ -138,25 +208,57 @@ export const VectorSteeringPage: React.FC = () => {
     }
 
     setValidationError(undefined);
+    const steerSeq = ++steerSeqRef.current;
+    const affectSeq = ++affectSeqRef.current;
     setLoading(true);
+    setAffectLoading(true);
     setApiError(null);
+    setAffectError(null);
 
     const payload = {
       text: trimmed,
-      concept,
-      strength,
+      concept: targetConcept,
+      strength: targetStrength,
       top_k_neighbors: topK,
       include_embeddings: includeEmbeddings,
     };
 
-    try {
-      const response = await steerEmbedding(payload);
-      setActiveSteerRun(payload, response);
-    } catch (err) {
-      setApiError(parseApiError(err));
-    } finally {
-      setLoading(false);
+    const steerTask = (async () => {
+      try {
+        const response = await steerEmbedding(payload);
+        if (steerSeq !== steerSeqRef.current) return;
+        setActiveSteerRun(payload, response);
+      } catch (err) {
+        if (steerSeq !== steerSeqRef.current) return;
+        setApiError(parseApiError(err));
+      } finally {
+        if (steerSeq === steerSeqRef.current) {
+          setLoading(false);
+        }
+      }
+    })();
+
+    const affectTask = runAffectAnalysis(trimmed, affectSeq, targetConcept);
+    await Promise.allSettled([steerTask, affectTask]);
+  };
+
+  const retryAffectOnly = () => {
+    const trimmed = text.trim();
+    if (!trimmed || trimmed.length > 1000) {
+      setValidationError('Please enter input text (1–1000 characters).');
+      return;
     }
+    const affectSeq = ++affectSeqRef.current;
+    setAffectLoading(true);
+    setAffectError(null);
+    void runAffectAnalysis(trimmed, affectSeq);
+  };
+
+  const handleAffectReviewUpdated = (recordId: string, review: HumanEmotionOverlay) => {
+    setLastSteerAffectResult((prev) =>
+      prev && prev.record_id === recordId ? { ...prev, review } : prev
+    );
+    void loadSemanticMap(undefined, true);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -165,6 +267,8 @@ export const VectorSteeringPage: React.FC = () => {
   };
 
   const handleReset = () => {
+    steerSeqRef.current += 1;
+    affectSeqRef.current += 1;
     setText(SAMPLE_PROMPTS[0]);
     setConcept('technical_tone');
     setStrength(defaultStrength);
@@ -172,6 +276,9 @@ export const VectorSteeringPage: React.FC = () => {
     setIncludeEmbeddings(true);
     setValidationError(undefined);
     setApiError(null);
+    setAffectError(null);
+    setAffectLoading(false);
+    setLoading(false);
     clearActiveSteerRun();
   };
 
@@ -262,6 +369,16 @@ export const VectorSteeringPage: React.FC = () => {
                     </div>
                   )}
                 </div>
+
+                {/* Compact Sentiment & Emotion Analysis + Human Verification directly beneath Input Sentence */}
+                <EmotionAnalysisPanel
+                  affectResult={lastSteerAffectResult}
+                  loading={affectLoading}
+                  error={affectError}
+                  currentInputText={text}
+                  onRetry={retryAffectOnly}
+                  onReviewUpdated={handleAffectReviewUpdated}
+                />
 
                 <div className="space-y-2">
                   <Select
@@ -577,6 +694,32 @@ export const VectorSteeringPage: React.FC = () => {
                 <Badge variant="cyan">Baseline</Badge>
               </CardHeader>
               <CardContent className="space-y-4">
+                {lastSteerAffectResult &&
+                  lastSteerAffectResult.input_text === lastSteerResult.input_text && (
+                    <div className="rounded-xl border border-border-subtle bg-background/70 px-3 py-2.5 text-xs flex flex-wrap items-center justify-between gap-2">
+                      <span className="text-text-muted font-medium">Original Input Affect</span>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Badge
+                          variant={sentimentVariant(
+                            lastSteerAffectResult.sentiment.predicted_label,
+                            lastSteerAffectResult.sentiment.is_uncertain
+                          )}
+                        >
+                          {lastSteerAffectResult.sentiment.is_uncertain
+                            ? `Uncertain (${lastSteerAffectResult.sentiment.predicted_label})`
+                            : lastSteerAffectResult.sentiment.predicted_label}{' '}
+                          ({(lastSteerAffectResult.sentiment.confidence * 100).toFixed(1)}%)
+                        </Badge>
+                        <Badge variant="violet">
+                          {formatEmotionDisplay(
+                            lastSteerAffectResult.review.human_emotion_label ??
+                              lastSteerAffectResult.emotion.predicted_emotion
+                          )}
+                          {lastSteerAffectResult.review.human_emotion_label ? ' (verified)' : ''}
+                        </Badge>
+                      </div>
+                    </div>
+                  )}
                 <div className="space-y-1.5">
                   <div className="text-xs font-medium text-text-secondary">
                     384D Embedding Preview

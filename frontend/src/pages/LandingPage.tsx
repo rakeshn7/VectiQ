@@ -4,6 +4,7 @@ import {
   ArrowRight,
   Atom,
   BarChart3,
+  BookOpen,
   CheckCircle2,
   Compass,
   Cpu,
@@ -15,16 +16,34 @@ import {
   SlidersHorizontal,
   X,
 } from 'lucide-react';
+import { GuideModal, type GuideTabId } from '@/components/GuideModal';
 import { LandingVectorGraphic } from '@/components/LandingVectorGraphic';
 import { Badge, Button, Card, CardContent, Reveal } from '@/components/ui';
 import { useGentleParallax } from '@/hooks/useScrollReveal';
 import { useStudio } from '@/hooks/useStudio';
 import { CONTRACT_CONCEPTS } from '@/utils/format';
 
-export const LandingPage: React.FC = () => {
-  const { connectionStatus, contractHealth, config } = useStudio();
+export interface LandingPageProps {
+  initialGuideOpen?: boolean;
+  initialGuideTab?: GuideTabId;
+}
+
+export const LandingPage: React.FC<LandingPageProps> = ({
+  initialGuideOpen = false,
+  initialGuideTab = 'walkthrough',
+}) => {
+  const { connectionStatus, contractHealth, config, experienceMode, setExperienceMode } =
+    useStudio();
   const parallaxY = useGentleParallax(0.045, 20);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const [guideOpen, setGuideOpen] = useState(initialGuideOpen);
+  const [guideTab, setGuideTab] = useState<GuideTabId>(initialGuideTab);
+
+  const openGuideModal = (tab: GuideTabId = 'walkthrough') => {
+    setGuideTab(tab);
+    setGuideOpen(true);
+    setMobileMenuOpen(false);
+  };
 
   const concepts = config?.steering.concepts ?? CONTRACT_CONCEPTS;
   const modelName = config?.model.name ?? 'all-MiniLM-L6-v2';
@@ -33,11 +52,11 @@ export const LandingPage: React.FC = () => {
 
   const statusBadge =
     connectionStatus === 'connected'
-      ? { variant: 'emerald' as const, label: 'API Ready' }
+      ? { variant: 'emerald' as const, label: 'Model Online' }
       : connectionStatus === 'partial'
-      ? { variant: 'amber' as const, label: 'API Partial' }
+      ? { variant: 'amber' as const, label: 'Model Partial' }
       : connectionStatus === 'checking'
-      ? { variant: 'blue' as const, label: 'Checking API' }
+      ? { variant: 'blue' as const, label: 'Checking Model' }
       : { variant: 'neutral' as const, label: 'API Offline' };
 
   const workspaceModules = [
@@ -114,52 +133,104 @@ export const LandingPage: React.FC = () => {
     <div className="min-h-screen bg-background text-text-primary flex flex-col">
       {/* Editorial Top Bar */}
       <header className="sticky top-0 z-40 border-b border-border bg-background/90 backdrop-blur-md">
-        <div className="mx-auto max-w-6xl px-5 sm:px-8 h-16 flex items-center justify-between gap-4">
+        <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-3">
           <Link
             to="/"
-            className="flex items-center gap-2.5 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-slate/40 rounded-lg"
+            className="flex items-center gap-2.5 shrink-0 focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-slate/40 rounded-lg"
           >
             <div className="w-8 h-8 rounded-lg bg-brand-navy text-white flex items-center justify-center shadow-editorial-sm">
               <Atom className="w-4 h-4" />
             </div>
             <div className="flex items-baseline gap-2">
               <span className="text-base font-semibold tracking-tight text-brand-navy">VectiQ</span>
-              <span className="hidden sm:inline text-xs text-text-muted">Semantic Space Studio</span>
+              <span className="hidden xl:inline text-xs text-text-muted">
+                Semantic Space Studio
+              </span>
             </div>
           </Link>
 
-          <nav aria-label="Landing Navigation" className="hidden md:flex items-center gap-6 text-xs font-medium text-text-secondary">
-            <a href="#how-it-works" className="hover:text-brand-navy transition-colors">
-              How It Works
-            </a>
-            <a href="#concepts" className="hover:text-brand-navy transition-colors">
-              Concepts
-            </a>
-            <a href="#modules" className="hover:text-brand-navy transition-colors">
-              Modules
-            </a>
+          <nav
+            aria-label="Landing Navigation"
+            className="hidden lg:flex items-center gap-5 text-xs font-medium text-text-secondary whitespace-nowrap"
+          >
             <Link to="/overview" className="hover:text-brand-navy transition-colors">
               Overview
             </Link>
-            <Link to="/explorer" className="hover:text-brand-navy transition-colors">
-              Explorer
-            </Link>
+            <a href="#modules" className="hover:text-brand-navy transition-colors">
+              Workspaces
+            </a>
+            <a href="#how-it-works" className="hover:text-brand-navy transition-colors">
+              Methodology
+            </a>
+            <button
+              type="button"
+              onClick={() => openGuideModal('pathways')}
+              className="hover:text-brand-navy transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-slate/40 rounded"
+            >
+              Who It&rsquo;s For
+            </button>
           </nav>
 
-          <div className="flex items-center gap-2.5">
-            <Badge variant={statusBadge.variant} className="hidden sm:inline-flex">
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Simple / Research Mode Selector */}
+            <div
+              role="group"
+              aria-label="Reading mode selector"
+              className="hidden sm:inline-flex rounded-lg border border-border bg-background-surface p-0.5 text-[11px] font-medium"
+            >
+              <button
+                type="button"
+                onClick={() => setExperienceMode('simple')}
+                aria-pressed={experienceMode === 'simple'}
+                className={`px-2 py-1 rounded-md transition-colors ${
+                  experienceMode === 'simple'
+                    ? 'bg-brand-navy text-white'
+                    : 'text-text-secondary hover:text-brand-navy'
+                }`}
+              >
+                Simple
+              </button>
+              <button
+                type="button"
+                onClick={() => setExperienceMode('research')}
+                aria-pressed={experienceMode === 'research'}
+                className={`px-2 py-1 rounded-md transition-colors ${
+                  experienceMode === 'research'
+                    ? 'bg-brand-teal text-white'
+                    : 'text-text-secondary hover:text-brand-navy'
+                }`}
+              >
+                Research
+              </button>
+            </div>
+
+            {/* Always-Visible Guide Button */}
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => openGuideModal('walkthrough')}
+              leftIcon={<BookOpen className="w-3.5 h-3.5 text-brand-teal" />}
+              className="bg-background-surface border-border text-brand-navy hover:border-brand-slate/70"
+            >
+              Guide
+            </Button>
+
+            <Badge variant={statusBadge.variant} className="hidden md:inline-flex whitespace-nowrap">
               {statusBadge.label}
             </Badge>
+
             <Link to="/steering" className="hidden sm:inline-flex">
               <Button size="sm" rightIcon={<ArrowRight className="w-3.5 h-3.5" />}>
                 Open Studio
               </Button>
             </Link>
+
             <button
               type="button"
               onClick={() => setMobileMenuOpen((prev) => !prev)}
               aria-label="Toggle navigation menu"
-              className="md:hidden p-2 rounded-lg border border-border bg-background-surface text-brand-navy"
+              className="lg:hidden p-2 rounded-lg border border-border bg-background-surface text-brand-navy"
             >
               {mobileMenuOpen ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
             </button>
@@ -168,54 +239,84 @@ export const LandingPage: React.FC = () => {
 
         {/* Mobile Nav Panel */}
         {mobileMenuOpen && (
-          <div className="md:hidden border-t border-border bg-background-surface px-5 py-4 space-y-3">
+          <div className="lg:hidden border-t border-border bg-background-surface px-5 py-4 space-y-3">
             <div className="flex flex-col space-y-2 text-sm text-text-secondary">
-              <a
-                href="#how-it-works"
-                onClick={() => setMobileMenuOpen(false)}
-                className="py-1.5 hover:text-brand-navy"
-              >
-                How It Works
-              </a>
-              <a
-                href="#concepts"
-                onClick={() => setMobileMenuOpen(false)}
-                className="py-1.5 hover:text-brand-navy"
-              >
-                Concepts
-              </a>
               <Link
                 to="/overview"
                 onClick={() => setMobileMenuOpen(false)}
                 className="py-1.5 hover:text-brand-navy"
               >
-                System Overview
+                Overview
               </Link>
-              <Link
-                to="/explorer"
+              <a
+                href="#modules"
                 onClick={() => setMobileMenuOpen(false)}
                 className="py-1.5 hover:text-brand-navy"
               >
-                Semantic Explorer
-              </Link>
-              <Link
-                to="/steering"
-                onClick={() => setMobileMenuOpen(false)}
-                className="py-1.5 font-medium text-brand-navy"
-              >
-                Vector Steering
-              </Link>
-              <Link
-                to="/evaluation"
+                Workspaces
+              </a>
+              <a
+                href="#how-it-works"
                 onClick={() => setMobileMenuOpen(false)}
                 className="py-1.5 hover:text-brand-navy"
               >
-                Evaluation Dashboard
-              </Link>
+                Methodology
+              </a>
+              <button
+                type="button"
+                onClick={() => openGuideModal('pathways')}
+                className="py-1.5 text-left hover:text-brand-navy"
+              >
+                Who It&rsquo;s For
+              </button>
+              <div className="flex items-center justify-between gap-3 pt-2 border-t border-border-subtle">
+                <span className="text-xs text-text-muted font-medium">Mode</span>
+                <div className="inline-flex rounded-lg border border-border bg-background-secondary p-0.5 text-xs font-medium">
+                  <button
+                    type="button"
+                    onClick={() => setExperienceMode('simple')}
+                    className={`px-2.5 py-1 rounded-md transition-colors ${
+                      experienceMode === 'simple'
+                        ? 'bg-brand-navy text-white'
+                        : 'text-text-secondary'
+                    }`}
+                  >
+                    Simple
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setExperienceMode('research')}
+                    className={`px-2.5 py-1 rounded-md transition-colors ${
+                      experienceMode === 'research'
+                        ? 'bg-brand-teal text-white'
+                        : 'text-text-secondary'
+                    }`}
+                  >
+                    Research
+                  </button>
+                </div>
+              </div>
+              <div className="flex items-center justify-between gap-2 pt-2">
+                <Badge variant={statusBadge.variant}>{statusBadge.label}</Badge>
+                <Link
+                  to="/steering"
+                  onClick={() => setMobileMenuOpen(false)}
+                >
+                  <Button size="sm" rightIcon={<ArrowRight className="w-3.5 h-3.5" />}>
+                    Open Studio
+                  </Button>
+                </Link>
+              </div>
             </div>
           </div>
         )}
       </header>
+
+      <GuideModal
+        open={guideOpen}
+        initialTab={guideTab}
+        onClose={() => setGuideOpen(false)}
+      />
 
       <main className="flex-1">
         {/* Hero Section */}

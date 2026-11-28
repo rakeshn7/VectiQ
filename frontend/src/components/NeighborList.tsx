@@ -1,9 +1,15 @@
 import React, { useState } from 'react';
 import { ChevronDown, ChevronUp, SlidersHorizontal } from 'lucide-react';
 import { Badge } from '@/components/ui';
-import type { NearestNeighborItem } from '@/types/api';
+import type { EmotionCategory, NearestNeighborItem } from '@/types/api';
 import { formatCoordinates, formatNumber } from '@/utils/format';
 import { cn } from '@/utils/cn';
+
+export interface NeighborEmotionMeta {
+  emotionLabel?: EmotionCategory | null;
+  rawLabel?: string | null;
+  humanLabel?: EmotionCategory | null;
+}
 
 export interface NeighborListProps {
   items: NearestNeighborItem[];
@@ -12,6 +18,7 @@ export interface NeighborListProps {
   highlightLabel?: string;
   highlightVariant?: 'amber' | 'rose' | 'emerald';
   retainedIds?: Set<string>;
+  emotionLookup?: Record<string, NeighborEmotionMeta>;
   onSelectForSteering?: (item: NearestNeighborItem) => void;
   emptyText?: string;
 }
@@ -23,6 +30,7 @@ export const NeighborList: React.FC<NeighborListProps> = ({
   highlightLabel = 'New Neighbor',
   highlightVariant = 'amber',
   retainedIds,
+  emotionLookup,
   onSelectForSteering,
   emptyText = 'No nearest neighbors returned.',
 }) => {
@@ -62,6 +70,17 @@ export const NeighborList: React.FC<NeighborListProps> = ({
                 <span className="text-[11px] font-mono text-text-muted">#{idx + 1}</span>
                 <span className="text-xs font-mono text-text-secondary">{item.id}</span>
                 <Badge variant={accent === 'violet' ? 'violet' : 'cyan'}>{item.category}</Badge>
+                {(() => {
+                  const meta = emotionLookup?.[item.id];
+                  const activeEmo = meta?.humanLabel ?? meta?.emotionLabel;
+                  if (!activeEmo) return null;
+                  return (
+                    <Badge variant="neutral" className="capitalize">
+                      {activeEmo === 'joy' ? 'joy / happiness' : activeEmo}
+                      {meta?.humanLabel ? ' (verified)' : ''}
+                    </Badge>
+                  );
+                })()}
                 {isHighlighted && <Badge variant={highlightVariant}>{highlightLabel}</Badge>}
                 {isRetained && <Badge variant="neutral">Retained</Badge>}
               </div>

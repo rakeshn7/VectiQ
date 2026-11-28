@@ -3,6 +3,7 @@
 from functools import lru_cache
 import os
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field
@@ -66,6 +67,36 @@ class Settings(BaseModel):
     default_top_k_neighbors: int = Field(
         default_factory=lambda: int(os.getenv("DEFAULT_TOP_K_NEIGHBORS", "5"))
     )
+    sentiment_model_name: str = Field(
+        default_factory=lambda: os.getenv(
+            "SENTIMENT_MODEL_NAME",
+            "cardiffnlp/twitter-roberta-base-sentiment-latest",
+        )
+    )
+    emotion_model_name: str = Field(
+        default_factory=lambda: os.getenv(
+            "EMOTION_MODEL_NAME",
+            "SamLowe/roberta-base-go_emotions",
+        )
+    )
+    sentiment_uncertainty_prob_threshold: float = Field(
+        default_factory=lambda: float(
+            os.getenv("SENTIMENT_UNCERTAINTY_PROB_THRESHOLD", "0.60")
+        )
+    )
+    sentiment_uncertainty_margin_threshold: float = Field(
+        default_factory=lambda: float(
+            os.getenv("SENTIMENT_UNCERTAINTY_MARGIN_THRESHOLD", "0.15")
+        )
+    )
+    emotion_uncertainty_prob_threshold: float = Field(
+        default_factory=lambda: float(
+            os.getenv("EMOTION_UNCERTAINTY_PROB_THRESHOLD", "0.45")
+        )
+    )
+    emotion_reviews_db_path_override: Optional[str] = Field(
+        default_factory=lambda: os.getenv("EMOTION_REVIEWS_DB_PATH") or None
+    )
     log_level: str = Field(
         default_factory=lambda: os.getenv("LOG_LEVEL", "INFO")
     )
@@ -87,6 +118,13 @@ class Settings(BaseModel):
     def dataset_path(self) -> Path:
         """Return path to the reference semantic corpus CSV."""
         return self.data_dir / "corpus.csv"
+
+    @property
+    def emotion_reviews_db_path(self) -> Path:
+        """Return path to SQLite DB storing human emotion confirmations and corrections."""
+        if self.emotion_reviews_db_path_override:
+            return Path(self.emotion_reviews_db_path_override)
+        return self.artifacts_dir / "emotion_reviews.db"
 
 
 @lru_cache
