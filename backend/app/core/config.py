@@ -1,6 +1,7 @@
 """Centralized application configuration loaded from environment variables."""
 
 from functools import lru_cache
+import json
 import os
 from pathlib import Path
 from typing import Optional
@@ -10,6 +11,33 @@ from pydantic import BaseModel, Field
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 load_dotenv(BASE_DIR / ".env")
+
+
+def _parse_origin_list(raw_value: str) -> list[str]:
+    """Parse comma-separated or JSON-array origin strings and strip trailing slashes."""
+    text = raw_value.strip()
+    if not text:
+        return []
+
+    candidates: list[str]
+    if text.startswith("["):
+        try:
+            loaded = json.loads(text)
+            if isinstance(loaded, list):
+                candidates = [str(item) for item in loaded]
+            else:
+                candidates = text.split(",")
+        except json.JSONDecodeError:
+            candidates = text.split(",")
+    else:
+        candidates = text.split(",")
+
+    normalized: list[str] = []
+    for item in candidates:
+        cleaned = item.strip().strip("\"'").rstrip("/")
+        if cleaned and cleaned != "*":
+            normalized.append(cleaned)
+    return normalized
 
 
 class Settings(BaseModel):
@@ -39,7 +67,10 @@ class Settings(BaseModel):
         default_factory=lambda: int(os.getenv("MAX_SEQUENCE_LENGTH", "256"))
     )
     frontend_url: str = Field(
-        default_factory=lambda: os.getenv("FRONTEND_URL", "http://localhost:5173")
+        default_factory=lambda: os.getenv("FRONTEND_URL", "")
+    )
+    cors_origins_raw: str = Field(
+        default_factory=lambda: os.getenv("CORS_ORIGINS", "")
     )
     data_dir: Path = Field(
         default_factory=lambda: Path(os.getenv("DATA_DIR", str(BASE_DIR / "data")))
@@ -102,16 +133,25 @@ class Settings(BaseModel):
     )
 
     @property
+    def is_production(self) -> bool:
+        """Return True when running in production environment."""
+        return self.environment.strip().lower() == "production"
+
+    @property
     def cors_origins(self) -> list[str]:
-        """Return deduplicated allowed CORS origins."""
-        origins = [
-            origin.strip().rstrip("/")
-            for origin in self.frontend_url.split(",")
-            if origin.strip().rstrip("/")
-        ]
-        for default_origin in ("http://localhost:5173", "http://127.0.0.1:5173"):
-            if default_origin not in origins:
-                origins.append(default_origin)
+        """Return deduplicated allowed CORS origins without leaking localhost in production."""
+        origins: list[str] = []
+        for candidate in (
+            *_parse_origin_list(self.frontend_url),
+            *_parse_origin_list(self.cors_origins_raw),
+        ):
+            if candidate not in origins:
+                origins.append(candidate)
+
+        if not self.is_production:
+            for default_origin in ("http://localhost:5173", "http://127.0.0.1:5173"):
+                if default_origin not in origins:
+                    origins.append(default_origin)
         return origins
 
     @property

@@ -27,6 +27,7 @@ const frontendRoot = fs.realpathSync(path.resolve(import.meta.dirname, '..'));
 const suites = [
   'evaluationDashboard.test.tsx',
   'guideAndGlossary.test.tsx',
+  'productionConfig.test.ts',
 ];
 
 for (const suite of suites) {

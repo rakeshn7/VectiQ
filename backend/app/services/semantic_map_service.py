@@ -198,13 +198,18 @@ class SemanticMapService:
         if save_artifacts:
             self.artifacts_dir.mkdir(parents=True, exist_ok=True)
             manifest_path, emb_path, coords_path, umap_path = self._artifact_paths()
+            manifest_tmp = self.artifacts_dir / "manifest.json.tmp"
+            # Remove stale manifest before writing new binary artifacts so an interrupted save never pairs mismatched files.
+            manifest_path.unlink(missing_ok=True)
+
             manifest = self._expected_manifest(dataset_hash, model_name, n_samples)
             manifest["trustworthiness"] = self.trustworthiness
 
             np.save(emb_path, self.corpus_embeddings)
             np.save(coords_path, self.corpus_coords_3d)
             joblib.dump(self._umap_model, umap_path)
-            manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+            manifest_tmp.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+            manifest_tmp.replace(manifest_path)
             logger.info("Saved UMAP and embedding artifacts to %s.", self.artifacts_dir)
 
     def set_precomputed_state(

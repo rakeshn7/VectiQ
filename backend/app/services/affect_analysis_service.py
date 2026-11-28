@@ -79,8 +79,19 @@ class HuggingFaceSentimentBackend:
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
         logger.info("Loading sentiment model %s", self.model_name)
-        tok = AutoTokenizer.from_pretrained(self.model_name)
-        mdl = AutoModelForSequenceClassification.from_pretrained(self.model_name)
+        try:
+            tok = AutoTokenizer.from_pretrained(self.model_name, local_files_only=True)
+            mdl = AutoModelForSequenceClassification.from_pretrained(
+                self.model_name, local_files_only=True
+            )
+            logger.info("Loaded sentiment model %s from local cache.", self.model_name)
+        except Exception:
+            logger.info(
+                "Local cache miss for sentiment model %s; downloading from HuggingFace Hub...",
+                self.model_name,
+            )
+            tok = AutoTokenizer.from_pretrained(self.model_name)
+            mdl = AutoModelForSequenceClassification.from_pretrained(self.model_name)
         mdl.eval()
         id2label = getattr(mdl.config, "id2label", None) or {
             0: "negative",
@@ -148,8 +159,19 @@ class HuggingFaceEmotionBackend:
         from transformers import AutoModelForSequenceClassification, AutoTokenizer
 
         logger.info("Loading multi-emotion model %s", self.model_name)
-        tok = AutoTokenizer.from_pretrained(self.model_name)
-        mdl = AutoModelForSequenceClassification.from_pretrained(self.model_name)
+        try:
+            tok = AutoTokenizer.from_pretrained(self.model_name, local_files_only=True)
+            mdl = AutoModelForSequenceClassification.from_pretrained(
+                self.model_name, local_files_only=True
+            )
+            logger.info("Loaded emotion model %s from local cache.", self.model_name)
+        except Exception:
+            logger.info(
+                "Local cache miss for emotion model %s; downloading from HuggingFace Hub...",
+                self.model_name,
+            )
+            tok = AutoTokenizer.from_pretrained(self.model_name)
+            mdl = AutoModelForSequenceClassification.from_pretrained(self.model_name)
         mdl.eval()
         raw_id2label = getattr(mdl.config, "id2label", None) or {}
         if not raw_id2label:
@@ -293,7 +315,8 @@ class AffectAnalysisService:
 
         if save_artifacts:
             self.artifacts_dir.mkdir(parents=True, exist_ok=True)
-            cache_file.write_text(
+            cache_tmp = self.artifacts_dir / "corpus_affect_cache_v1.json.tmp"
+            cache_tmp.write_text(
                 json.dumps(
                     {
                         "signature": expected_sig,
@@ -302,6 +325,7 @@ class AffectAnalysisService:
                 ),
                 encoding="utf-8",
             )
+            cache_tmp.replace(cache_file)
         self.is_initialized = True
         logger.info("Initialized corpus sentiment & emotion metadata for %d sentences.", len(self.corpus_affect))
 

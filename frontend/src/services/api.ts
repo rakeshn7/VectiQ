@@ -1,8 +1,56 @@
 import axios, { AxiosError } from 'axios';
 import type { ApiErrorDetail, ApiErrorResponse } from '@/types/api';
 
-const rawBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
-export const API_BASE_URL = rawBaseUrl.replace(/\/+$/, '');
+export interface ApiBaseUrlResolutionOptions {
+  viteApiBaseUrl?: string;
+  runtimeApiBaseUrl?: string;
+  isProd?: boolean;
+}
+
+export interface ResolvedApiBaseUrl {
+  baseUrl: string;
+  isMissingProdConfig: boolean;
+}
+
+export const DEV_FALLBACK_API_BASE_URL = import.meta.env.PROD ? '' : 'http://localhost:8000';
+
+export function resolveApiBaseUrl(
+  options: ApiBaseUrlResolutionOptions = {}
+): ResolvedApiBaseUrl {
+  const runtimeUrl = (options.runtimeApiBaseUrl ?? '').trim();
+  const buildUrl = (options.viteApiBaseUrl ?? '').trim();
+  const chosen = runtimeUrl || buildUrl;
+  if (chosen) {
+    return {
+      baseUrl: chosen.replace(/\/+$/, ''),
+      isMissingProdConfig: false,
+    };
+  }
+  if (options.isProd) {
+    return {
+      baseUrl: '',
+      isMissingProdConfig: true,
+    };
+  }
+  return {
+    baseUrl: DEV_FALLBACK_API_BASE_URL,
+    isMissingProdConfig: false,
+  };
+}
+
+const runtimeConfig =
+  typeof globalThis !== 'undefined'
+    ? (globalThis as { __VECTIQ_CONFIG__?: { apiBaseUrl?: string } }).__VECTIQ_CONFIG__
+    : undefined;
+
+const resolvedApiConfig = resolveApiBaseUrl({
+  viteApiBaseUrl: import.meta.env.VITE_API_BASE_URL,
+  runtimeApiBaseUrl: runtimeConfig?.apiBaseUrl,
+  isProd: Boolean(import.meta.env.PROD),
+});
+
+export const API_BASE_URL = resolvedApiConfig.baseUrl;
+export const IS_API_BASE_URL_MISSING_IN_PROD = resolvedApiConfig.isMissingProdConfig;
 export const API_V1_PREFIX = '/api/v1';
 
 export interface ParsedApiError {
@@ -21,6 +69,18 @@ export const apiClient = axios.create({
     Accept: 'application/json',
   },
   timeout: 30000,
+});
+
+apiClient.interceptors.request.use((config) => {
+  if (IS_API_BASE_URL_MISSING_IN_PROD) {
+    const missingError = new AxiosError(
+      'Backend API URL is not configured for production (VITE_API_BASE_URL is unset).',
+      'ERR_MISSING_API_CONFIG',
+      config
+    );
+    return Promise.reject(missingError);
+  }
+  return config;
 });
 
 apiClient.interceptors.response.use(
@@ -43,6 +103,18 @@ export function parseApiError(error: unknown): ParsedApiError {
       message: error instanceof Error ? error.message : 'An unexpected error occurred.',
       details: [],
       isNetworkError: false,
+      isNotImplemented: false,
+    };
+  }
+
+  if (error.code === 'ERR_MISSING_API_CONFIG') {
+    return {
+      status: null,
+      code: 'MISSING_API_CONFIG',
+      message:
+        'Frontend production build is missing VITE_API_BASE_URL. Configure your deployed backend HTTPS URL and rebuild.',
+      details: [],
+      isNetworkError: true,
       isNotImplemented: false,
     };
   }
